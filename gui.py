@@ -1,10 +1,21 @@
 # gui.py
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog, messagebox
 import simpy
 from monkey_patch import recursos_rastreados, transferencias_pendentes
-import simu
 import math
+import importlib.util
+import os
+import sys
+
+# Default simulation module (can be None)
+default_simu = None
+try:
+    import simu
+
+    default_simu = simu
+except ImportError:
+    pass
 
 
 class SimPyVisualizer(tk.Tk):
@@ -21,6 +32,10 @@ class SimPyVisualizer(tk.Tk):
         self.offset_x = 0.0
         self.offset_y = 0.0
 
+        # Módulo de simulação atual
+        self.current_sim_module = default_simu
+        self.sim_file_path = "simu.py" if default_simu else ""
+
         # Controle de Animação
         self.obj_coords_cache = {}  # Cache para guardar (x, y) de cada objeto visual
         self.active_animations = []  # Lista de animações correndo
@@ -30,10 +45,31 @@ class SimPyVisualizer(tk.Tk):
         self._setup_canvas()
 
         # Inicializa Simulação
-        self.reset_simulation()
+        if self.current_sim_module:
+            self.reset_simulation()
 
     def _setup_top_bar(self):
-        bar = ttk.Frame(self, padding=5)
+        # Frame principal da barra
+        top_container = ttk.Frame(self)
+        top_container.pack(side=tk.TOP, fill=tk.X)
+
+        # Barra de Arquivo (Nova)
+        file_bar = ttk.Frame(top_container, padding=5)
+        file_bar.pack(side=tk.TOP, fill=tk.X)
+
+        ttk.Label(file_bar, text="Simulation File:").pack(side=tk.LEFT, padx=5)
+
+        self.ent_file = ttk.Entry(file_bar, width=60)
+        self.ent_file.pack(side=tk.LEFT, padx=5)
+        if self.sim_file_path:
+            self.ent_file.insert(0, os.path.abspath(self.sim_file_path))
+        self.ent_file.config(state="readonly")
+
+        ttk.Button(file_bar, text="📂 Load...", command=self.browse_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(file_bar, text="🔄 Reload", command=self.reload_simulation_file).pack(side=tk.LEFT, padx=5)
+
+        # Barra de Controles (Existente)
+        bar = ttk.Frame(top_container, padding=5)
         bar.pack(side=tk.TOP, fill=tk.X)
 
         # Botões de Controle
@@ -67,6 +103,51 @@ class SimPyVisualizer(tk.Tk):
         self.ent_target = ttk.Entry(right_frame, width=10)
         self.ent_target.insert(0, "100")
         self.ent_target.pack(side=tk.LEFT)
+
+    def browse_file(self):
+        path = filedialog.askopenfilename(filetypes=[("Python Files", "*.py")])
+        if path:
+            # Tenta carregar ANTES de atualizar a UI
+            if self.load_module_from_path(path):
+                self.ent_file.config(state="normal")
+                self.ent_file.delete(0, tk.END)
+                self.ent_file.insert(0, path)
+                self.ent_file.config(state="readonly")
+                self.sim_file_path = path
+                self.reset_simulation()
+
+    def reload_simulation_file(self):
+        path = self.ent_file.get()
+        if self.load_module_from_path(path):
+            self.sim_file_path = path
+            self.reset_simulation()
+
+    def load_module_from_path(self, path):
+        if not path or not os.path.exists(path):
+            messagebox.showerror("Error", "File not found!")
+            return False
+
+        try:
+            # Dynamic module loading
+            module_name = os.path.splitext(os.path.basename(path))[0]
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+
+                if not hasattr(module, "setup"):
+                    messagebox.showerror("Error", "The file must contain a 'setup(env)' function.")
+                    return False
+
+                self.current_sim_module = module
+                return True
+            else:
+                messagebox.showerror("Error", "Could not load module spec.")
+                return False
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load file:\n{e}")
+            return False
 
     def _setup_canvas(self):
         self.canvas_frame = tk.Frame(self)  # Container for canvas + floating buttons
@@ -232,9 +313,17 @@ class SimPyVisualizer(tk.Tk):
         self.offset_x = 0.0
         self.offset_y = 0.0
 
+        if not self.current_sim_module:
+            return
+
         # Reinicia ambiente SimPy e Setup do usuário
         self.env = simpy.Environment()
-        simu.setup(self.env)
+
+        try:
+            self.current_sim_module.setup(self.env)
+        except Exception as e:
+            messagebox.showerror("Simulation Error", f"Error in setup():\n{e}")
+            return
 
         self.ent_target.config(state="normal")
         self.lbl_time.config(text="Time: 0.00")
