@@ -1,77 +1,57 @@
-# monkey_patch.py
-import simpy
 import inspect
 import re
 import weakref
 
-# Usamos WeakSet para não impedir que o GC colete objetos destruídos
-recursos_rastreados = weakref.WeakSet()
-# Mantemos uma lista auxiliar para iterar de forma ordenada se necessario, ou apenas usamos o set
-# Como WeakSet não é iterável consistentemente durante GC, pode ser truque
-# Mas vamos assumir iteração segura na GUI copiando o set
+import simpy
 
-# Lista de transferências para animação (eventos transientes)
-transferencias_pendentes = []
 
-# Mapa para rastrear onde cada Processo (via hash/id) estava por último
-# Chave: active_process (weakref), Valor: resource_instance (obj)
-# Precisamos de um dicionário que não segure o processo
+tracked_resources = weakref.WeakSet()
+pending_transfers = []
+step_logs = []
 process_locations = weakref.WeakKeyDictionary()
 
 
-def registrar_interacao(env, resource_instance):
-    """
-    Função auxiliar chamada pelos métodos interceptados para registrar o fluxo.
-    """
+def register_interaction(env, resource_instance):
+    """Registers process-resource interaction for logs and transfer animations."""
     if not env or not hasattr(env, "active_process") or env.active_process is None:
         return
 
-    proc = env.active_process
+    process = env.active_process
+    resource_name = getattr(resource_instance, "visual_name", str(resource_instance))
+    step_logs.append(f"[{env.now:.2f}] [RESOURCE] Process '{process}' accessed '{resource_name}'")
 
-    # Se ja sabemos onde ele estava
-    if proc in process_locations:
-        last_loc = process_locations[proc]
+    if process in process_locations:
+        previous_resource = process_locations[process]
+        if previous_resource != resource_instance:
+            pending_transfers.append({"from": previous_resource, "to": resource_instance, "item": str(process)})
 
-        # Se mudou de lugar (e não é o mesmo recurso)
-        if last_loc != resource_instance:
-            transferencias_pendentes.append({"from": last_loc, "to": resource_instance, "item": str(proc)})
-
-    # Atualiza localização atual
-    process_locations[proc] = resource_instance
+    process_locations[process] = resource_instance
 
 
-def tentar_descobrir_nome(instance):
-    """Tenta descobrir o nome da variável que está recebendo a instância."""
+def try_discover_name(instance):
+    """Tries to discover the variable name receiving this instance."""
     try:
-        # Pega o frame anterior (quem chamou o __init__)
         frame = inspect.currentframe().f_back.f_back
         if not frame:
             return None
 
-        # Pega o código fonte e o número da linha
-        arquivo = inspect.getsourcefile(frame)
-        if not arquivo:
+        source_file = inspect.getsourcefile(frame)
+        if not source_file:
             return None
 
-        # info = inspect.getframeinfo(frame)
-        # if not info.code_context: return None
-        # codigo = "".join(info.code_context).strip()
-
-        # Usando getsourcelines + lineno para robustez
-        lines, start = inspect.getsourcelines(frame)
-        relative_line = frame.f_lineno - start
+        lines, start_line = inspect.getsourcelines(frame)
+        relative_line = frame.f_lineno - start_line
         if 0 <= relative_line < len(lines):
-            codigo = lines[relative_line].strip()
-            match = re.search(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=", codigo)
+            code_line = lines[relative_line].strip()
+            match = re.search(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=", code_line)
             if match:
                 return match.group(1)
-
     except Exception:
         pass
+
     return None
 
 
-# Guardamos as classes originais
 OriginalResource = simpy.Resource
 OriginalContainer = simpy.Container
 OriginalStore = simpy.Store
@@ -80,50 +60,111 @@ OriginalStore = simpy.Store
 class TrackedResource(OriginalResource):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.nome_visual = tentar_descobrir_nome(self) or f"Resource_{id(self)}"
-        self.tipo_visual = "RESOURCE"
-        recursos_rastreados.add(self)
+        self.visual_name = try_discover_name(self) or f"Resource_{id(self)}"
+        self.visual_type = "RESOURCE"
+        tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
-        registrar_interacao(self._env, self)
+        register_interaction(self._env, self)
         return super().request(*args, **kwargs)
+
+    def release(self, *args, **kwargs):
+        register_interaction(self._env, self)
+        return super().release(*args, **kwargs)
 
 
 class TrackedContainer(OriginalContainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.nome_visual = tentar_descobrir_nome(self) or f"Container_{id(self)}"
-        self.tipo_visual = "CONTAINER"
-        recursos_rastreados.add(self)
+        self.visual_name = try_discover_name(self) or f"Container_{id(self)}"
+        self.visual_type = "CONTAINER"
+        tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
-        registrar_interacao(self._env, self)
+        register_interaction(self._env, self)
         return super().put(*args, **kwargs)
 
     def get(self, *args, **kwargs):
-        registrar_interacao(self._env, self)
+        register_interaction(self._env, self)
         return super().get(*args, **kwargs)
 
 
 class TrackedStore(OriginalStore):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.nome_visual = tentar_descobrir_nome(self) or f"Store_{id(self)}"
-        self.tipo_visual = "STORE"
+        self.visual_name = try_discover_name(self) or f"Store_{id(self)}"
+        self.visual_type = "STORE"
         self.is_expanded = False
-        recursos_rastreados.add(self)
+        tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
-        registrar_interacao(self._env, self)
+        register_interaction(self._env, self)
         return super().put(*args, **kwargs)
 
     def get(self, *args, **kwargs):
-        registrar_interacao(self._env, self)
+        register_interaction(self._env, self)
         return super().get(*args, **kwargs)
 
 
+class TrackedEnvironment(simpy.Environment):
+    def step(self):
+        if not hasattr(self, "_step_count"):
+            self._step_count = 0
+        self._step_count += 1
+
+        details = []
+        event_queue = getattr(self, "_queue", [])
+
+        if event_queue:
+            try:
+                next_item = event_queue[0]
+                event = next_item[3]
+
+                event_name = type(event).__name__
+                details.append(f"Event: {event_name}")
+
+                if event_name == "Timeout":
+                    details.append(f"Delay: {event.value}")
+
+                if hasattr(event, "resource"):
+                    resource = event.resource
+                    resource_name = getattr(resource, "visual_name", str(resource))
+                    details.append(f"Resource: {resource_name}")
+
+                if event_name == "Process" and hasattr(event, "name"):
+                    details.append(f"Process: {event.name}")
+
+                if hasattr(event, "callbacks") and event.callbacks:
+                    waiting_processes = []
+                    for callback in event.callbacks:
+                        obj = getattr(callback, "__self__", None)
+                        if hasattr(obj, "name"):
+                            process_name = obj.name
+                            if not process_name and hasattr(obj, "__self__"):
+                                owner = obj.__self__
+                                if hasattr(owner, "name"):
+                                    process_name = owner.name
+                            if process_name:
+                                waiting_processes.append(process_name)
+
+                    if waiting_processes:
+                        details.append(f"Triggering: {', '.join(waiting_processes)}")
+            except Exception as exc:
+                details.append(f"(Error inspecting event: {exc})")
+        else:
+            details.append("No scheduled events (EmptySchedule incoming?)")
+
+        step_logs.append(f"[{self.now:.2f}] [STEP {self._step_count}] {' | '.join(details)}")
+
+        super().step()
+
+        if self.active_process:
+            step_logs.append(f"      -> Running inside process: {self.active_process.name}")
+
+
 def apply_patch():
-    """Aplica o Monkey Patch nas classes do SimPy."""
+    """Applies Monkey Patch to SimPy classes."""
     simpy.Resource = TrackedResource
     simpy.Container = TrackedContainer
     simpy.Store = TrackedStore
+    simpy.Environment = TrackedEnvironment

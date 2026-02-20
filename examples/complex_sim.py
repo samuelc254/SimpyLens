@@ -1,11 +1,15 @@
-import simpy
 import random
-import sys
 import os
+import sys
+
+import simpy
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from simpy_visualizer import SimPyVisualizer
 
-# CONFIGURAÇÃO DE LOGS
+
+# LOG CONFIGURATION
 VERBOSE = False
 
 if not VERBOSE:
@@ -14,164 +18,126 @@ if not VERBOSE:
         pass
 
 
-# Métricas Globais
-pacientes_atendidos = 0
+patients_served = 0
 
 
 def hospital_run(env):
-    global pacientes_atendidos
+    global patients_served
 
-    # ---------------------------------------------------------
-    # 1. Definição dos Recursos do Hospital
-    # ---------------------------------------------------------
+    reception = simpy.Resource(env, capacity=3)
+    triage = simpy.Resource(env, capacity=2)
+    waiting_room = simpy.Store(env, capacity=50)
+    consultation_rooms = simpy.Resource(env, capacity=5)
+    laboratory = simpy.Resource(env, capacity=2)
+    blood_bank = simpy.Container(env, capacity=100, init=80)
+    pharmacy = simpy.Container(env, capacity=500, init=400)
+    surgery_center = simpy.Resource(env, capacity=1)
+    recovery_room = simpy.Store(env, capacity=5)
+    billing = simpy.Resource(env, capacity=2)
 
-    # Recepção: Primeiro ponto de contato
-    recepcao = simpy.Resource(env, capacity=3)
+    env.process(logistics_resupply(env, blood_bank, pharmacy))
 
-    # Triagem: Enfermeiros classificam risco
-    triagem = simpy.Resource(env, capacity=2)
-
-    # Sala de Espera Principal: Onde os pacientes aguardam chamados
-    # Usamos Store para visualizar os pacientes (objetos) esperando
-    sala_espera = simpy.Store(env, capacity=50)
-
-    # Consultórios Médicos
-    consultorios = simpy.Resource(env, capacity=5)
-
-    # Laboratório de Exames (Raio-X, Sangue)
-    laboratorio = simpy.Resource(env, capacity=2)
-
-    # Banco de Sangue (Container): Consumido em cirurgias
-    banco_sangue = simpy.Container(env, capacity=100, init=80)
-
-    # Farmácia Central (Container): Estoque de medicamentos
-    farmacia = simpy.Container(env, capacity=500, init=400)
-
-    # Centro Cirúrgico
-    centro_cirurgico = simpy.Resource(env, capacity=1)
-
-    # Sala de Recuperação (Pós-operatório)
-    sala_recuperacao = simpy.Store(env, capacity=5)
-
-    # Faturamento / Alta
-    faturamento = simpy.Resource(env, capacity=2)
-
-    # Processo auxiliar: Reabastecimento de Sangue e Remédios
-    env.process(abastecimento_logistico(env, banco_sangue, farmacia))
-
-    id_paciente = 1
-
+    patient_id = 1
     while True:
-        # Chegada de pacientes (exponencial)
-        yield env.timeout(random.expovariate(1.0 / 2.0))  # Chega um a cada ~2 min
+        yield env.timeout(random.expovariate(1.0 / 2.0))
+        patient_type = random.choice(["Normal", "Normal", "Normal", "Urgent"])
+        patient = {"id": patient_id, "type": patient_type, "arrival": env.now}
 
-        tipo_paciente = random.choice(["Normal", "Normal", "Normal", "Urgente"])
-        paciente = {"id": id_paciente, "tipo": tipo_paciente, "chegada": env.now}
+        env.process(
+            patient_process(
+                env,
+                patient,
+                reception,
+                triage,
+                waiting_room,
+                consultation_rooms,
+                laboratory,
+                blood_bank,
+                pharmacy,
+                surgery_center,
+                recovery_room,
+                billing,
+            )
+        )
+        patient_id += 1
 
-        env.process(processo_paciente(env, paciente, recepcao, triagem, sala_espera, consultorios, laboratorio, banco_sangue, farmacia, centro_cirurgico, sala_recuperacao, faturamento))
-        id_paciente += 1
 
-
-def abastecimento_logistico(env, sangue, remedios):
-    """Caminhão de suprimentos chega periodicamente"""
+def logistics_resupply(env, blood, meds):
+    """Supply truck arrives periodically."""
     while True:
         yield env.timeout(100)
-        # Reabastece sangue se necessário
-        falta_sangue = sangue.capacity - sangue.level
-        if falta_sangue > 10:
-            yield sangue.put(min(20, falta_sangue))
-            print(f"[Logística] Sangue reabastecido.")
+        missing_blood = blood.capacity - blood.level
+        if missing_blood > 10:
+            yield blood.put(min(20, missing_blood))
+            print("[Logistics] Blood refilled.")
 
-        # Reabastece farmácia
-        yield remedios.put(50)
-        print(f"[Logística] Farmácia reabastecida.")
+        yield meds.put(50)
+        print("[Logistics] Pharmacy refilled.")
 
 
-def processo_paciente(env, p, recepcao, triagem, sala_espera, consultorio, lab, sangue, farmacia, cirurgia, recuperacao, faturamento):
-    global pacientes_atendidos
-    pid = p["id"]
-    tipo = p["tipo"]
+def patient_process(env, patient, reception, triage, waiting_room, consultation, lab, blood, pharmacy, surgery, recovery, billing):
+    global patients_served
+    patient_id = patient["id"]
+    patient_type = patient["type"]
 
-    print(f"Paciente {pid} ({tipo}) chegou.")
+    print(f"Patient {patient_id} ({patient_type}) arrived.")
 
-    # 1. Recepção
-    with recepcao.request() as req:
+    with reception.request() as req:
         yield req
         yield env.timeout(random.uniform(1, 3))
 
-    # 2. Triagem
-    with triagem.request() as req:
+    with triage.request() as req:
         yield req
         yield env.timeout(random.uniform(2, 5))
 
-    # 3. Aguarda na Sala de Espera (Store)
-    # Coloca o paciente na "Cadeira"
-    yield sala_espera.put(f"P{pid}")
+    yield waiting_room.put(f"P{patient_id}")
 
-    # Simula espera até o médico chamar (recurso liberar)
-    # A lógica aqui é invertida: o paciente ocupa espaço na sala,
-    # tenta pegar o médico, e quando consegue, sai da sala.
+    doctor_request = consultation.request()
+    yield doctor_request
 
-    # Tenta pegar um médico
-    req_medico = consultorio.request()
-    yield req_medico  # Espera o médico liberar
+    yield waiting_room.get()
 
-    # Sai da sala de espera (libera a cadeira)
-    yield sala_espera.get()
+    consultation_time = random.uniform(5, 15)
+    yield env.timeout(consultation_time)
 
-    # 4. Consulta Médica
-    # Já temos o request feito acima
-    t_consulta = random.uniform(5, 15)
-    yield env.timeout(t_consulta)
-
-    # Médico define o destino
     chance = random.random()
 
     if chance < 0.2:
-        # Caso Grave: Cirurgia
-        consultorio.release(req_medico)  # Libera o médico
-        print(f"Paciente {pid} encaminhado para CIRURGIA.")
+        consultation.release(doctor_request)
+        print(f"Patient {patient_id} sent to SURGERY.")
 
-        # Consome Sangue
-        if sangue.level >= 2:
-            yield sangue.get(2)
+        if blood.level >= 2:
+            yield blood.get(2)
 
-        with cirurgia.request() as req_cir:
-            yield req_cir
+        with surgery.request() as surgery_request:
+            yield surgery_request
             yield env.timeout(random.uniform(20, 40))
 
-        # Recuperação
-        yield recuperacao.put(f"P{pid}-Recup")
-        yield env.timeout(15)  # Tempo descansando
-        yield recuperacao.get()
+        yield recovery.put(f"P{patient_id}-Recovery")
+        yield env.timeout(15)
+        yield recovery.get()
 
     elif chance < 0.5:
-        # Exames
-        consultorio.release(req_medico)  # Libera médico
+        consultation.release(doctor_request)
 
-        with lab.request() as req_lab:
-            yield req_lab
+        with lab.request() as lab_request:
+            yield lab_request
             yield env.timeout(random.uniform(5, 10))
 
-        # Retorno rápido ao médico (fura fila ou nova consulta? vamos simplificar: vai pra farmacia direto)
-        # Consome contraste/insumos da farmacia para o exame
-        yield farmacia.get(1)
+        yield pharmacy.get(1)
 
     else:
-        # Caso Simples: Receita e Casa
-        consultorio.release(req_medico)
+        consultation.release(doctor_request)
         yield env.timeout(1)
 
-    # 5. Farmácia (Pegar remédios para casa)
-    yield farmacia.get(random.randint(1, 3))
+    yield pharmacy.get(random.randint(1, 3))
 
-    # 6. Pagamento / Alta
-    with faturamento.request() as req:
+    with billing.request() as req:
         yield req
         yield env.timeout(random.uniform(2, 4))
 
-    pacientes_atendidos += 1
-    print(f"Paciente {pid} teve ALTA.")
+    patients_served += 1
+    print(f"Patient {patient_id} discharged.")
 
 
 def setup(env):
@@ -179,6 +145,5 @@ def setup(env):
 
 
 if __name__ == "__main__":
-    # Inicia a visualização
     viz = SimPyVisualizer(setup_func=setup, title="Hospital Complex Simulation")
     viz.mainloop()

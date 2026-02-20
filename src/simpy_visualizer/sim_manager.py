@@ -1,10 +1,10 @@
 import simpy
 import time
-from .monkey_patch import transferencias_pendentes, recursos_rastreados
+from .monkey_patch import pending_transfers, tracked_resources, step_logs
 
 
 class SimulationController:
-    def __init__(self, draw_callback, start_animations_cb, update_time_cb, schedule_cb, speed_getter, on_pause_cb=None):
+    def __init__(self, draw_callback, start_animations_cb, update_time_cb, schedule_cb, speed_getter, on_pause_cb=None, log_callback=None):
         """Controller that manages the SimPy Environment and stepping logic.
 
         - draw_callback(initial=False): function to ask the GUI to redraw
@@ -13,6 +13,7 @@ class SimulationController:
         - schedule_cb(ms, func): schedules a callable after ms milliseconds (GUI's after)
         - speed_getter(): returns integer slider value 0..100 used to compute delay
         - on_pause_cb(): function to call when simulation pauses (e.g. target reached)
+        - log_callback(messages): function to log messages in the GUI
         """
         self.env = None
         self.running = False
@@ -25,6 +26,7 @@ class SimulationController:
         self.schedule_cb = schedule_cb
         self.speed_getter = speed_getter
         self.on_pause_cb = on_pause_cb if on_pause_cb else lambda: None
+        self.log_callback = log_callback if log_callback else lambda msg: None
 
     def set_setup_func(self, func):
         self._setup_func = func
@@ -34,7 +36,9 @@ class SimulationController:
             self._setup_func = setup_func
 
         self.running = False
-        recursos_rastreados.clear()
+        tracked_resources.clear()
+        step_logs.clear()
+        self.log_callback(["--- Simulation Reset ---"])
 
         if not self._setup_func:
             self.env = None
@@ -63,14 +67,21 @@ class SimulationController:
     def run(self):
         if not self._setup_func:
             return
+
+        if self.env is None:
+            self.reset()
+
         if not self.running:
             self.running = True
-            # default target_time remains as set by user via GUI entry; caller handles setting target_time on this controller
             self.step()
 
     def run_single_step(self):
         if not self.env:
-            return
+            if self._setup_func:
+                self.reset()
+            else:
+                return
+
         self.running = False
         try:
             if self.env.peek() != simpy.core.Infinity:
@@ -78,10 +89,15 @@ class SimulationController:
                 self.update_time_cb(self.env.now)
                 self.draw_callback()
 
-                if transferencias_pendentes:
+                # Process logs
+                if step_logs:
+                    self.log_callback(list(step_logs))
+                    step_logs.clear()
+
+                if pending_transfers:
                     delay_ms = self._compute_delay_ms()
-                    transfers = list(transferencias_pendentes)
-                    transferencias_pendentes.clear()
+                    transfers = list(pending_transfers)
+                    pending_transfers.clear()
                     self.start_animations_cb(transfers, delay_ms)
         except simpy.core.EmptySchedule:
             pass
@@ -112,23 +128,30 @@ class SimulationController:
             self.on_pause_cb()
             return
 
-        # Verifica target time pos-step
+        # Check target time post-step
         if self.env.now >= self.target_time:
             self.running = False
             self.update_time_cb(self.env.now)
             self.draw_callback()
+            if step_logs:
+                self.log_callback(list(step_logs))
+                step_logs.clear()
             self.on_pause_cb()
             return
 
         self.update_time_cb(self.env.now)
         self.draw_callback()
 
+        if step_logs:
+            self.log_callback(list(step_logs))
+            step_logs.clear()
+
         target_delay_ms = self._compute_delay_ms()
 
         # Handle pending transfers
-        if transferencias_pendentes:
-            transfers = list(transferencias_pendentes)
-            transferencias_pendentes.clear()
+        if pending_transfers:
+            transfers = list(pending_transfers)
+            pending_transfers.clear()
             # Animation duration matches the step interval
             self.start_animations_cb(transfers, target_delay_ms)
 

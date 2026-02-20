@@ -1,129 +1,113 @@
-import simpy
 import random
-import sys
 import os
+import sys
 
+import simpy
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from simpy_visualizer import SimPyVisualizer
 
-# CONFIGURAÇÃO DE LOGS (True = Mostra mensagens, False = Silencia)
+
+# LOG CONFIGURATION (True = show messages, False = silence)
 VERBOSE = False
 
 if not VERBOSE:
-    # Redefine a função print para não fazer nada neste módulo
+
     def print(*args, **kwargs):
         pass
 
 
-# Variável global para métricas
-total_fabricados = 0
+total_manufactured = 0
 
 
-def fabrica(env):
-    global total_fabricados
-    # ... (rest of the logic, but wait, I need to copy paste or rewrite it) ...
-    # Instead of copying, I can just import it if I kept simu.py, but I plan to move it.
-    # So I must copy the content.
+def factory(env):
+    global total_manufactured
 
-    # --- RECURSOS (MÁQUINAS E OPERADORES) ---
-    moldagem = simpy.Resource(env, capacity=3)  # Aumentei para 3 máquinas
-    esmaltacao = simpy.Resource(env, capacity=2)  # Nova etapa
-    pintura = simpy.Resource(env, capacity=2)  # Aumentei a capacidade
+    # --- RESOURCES (MACHINES AND OPERATORS) ---
+    molding = simpy.Resource(env, capacity=3)
+    glazing = simpy.Resource(env, capacity=2)
+    painting = simpy.Resource(env, capacity=2)
 
-    # --- STORES (PROCESSOS EM LOTE OU COMPLEXOS) ---
-    forno = simpy.Store(env, capacity=5)  # Mantém o lote de 5
+    # --- STORE (BATCH PROCESS) ---
+    oven = simpy.Store(env, capacity=5)
 
-    # --- CONTAINERS (ESTOQUES DE FLUIDOS/GRANEL) ---
-    deposito_argila = simpy.Container(env, capacity=100, init=20)  # Começa com pouca argila
-    expedicao = simpy.Container(env, capacity=1000, init=0)  # Estoque final
+    # --- CONTAINERS (BULK INVENTORY) ---
+    clay_depot = simpy.Container(env, capacity=100, init=20)
+    shipping = simpy.Container(env, capacity=1000, init=0)
 
-    # Inicia processos auxiliares
-    env.process(abastecedor_argila(env, deposito_argila))
+    env.process(clay_refill(env, clay_depot))
 
-    id_pote = 1
-
+    pot_id = 1
     while True:
-        # Chegada de pedidos
-        tempo_chegada = max(0.5, random.normalvariate(2, 0.5))
-        yield env.timeout(tempo_chegada)
+        arrival_time = max(0.5, random.normalvariate(2, 0.5))
+        yield env.timeout(arrival_time)
 
-        pote_atual = {"id": id_pote, "tipo": random.choice(["Vaso", "Prato", "Caneca"]), "chegada": env.now}
-
-        env.process(processar_pote(env, pote_atual, moldagem, esmaltacao, forno, pintura, deposito_argila, expedicao))
-        id_pote += 1
+        current_pot = {"id": pot_id, "type": random.choice(["Vase", "Plate", "Mug"]), "arrival": env.now}
+        env.process(process_pot(env, current_pot, molding, glazing, oven, painting, clay_depot, shipping))
+        pot_id += 1
 
 
-def abastecedor_argila(env, deposito):
-    """Processo independente que reabastece o estoque de argila periodicamente"""
+def clay_refill(env, depot):
+    """Independent process that periodically refills clay inventory."""
     while True:
-        yield env.timeout(15)  # A cada 15 min
-        if deposito.level < 50:
-            yield deposito.put(40)
-            print(f"[Sistema] Reabastecimento de Argila (+40). Estoque: {deposito.level}")
+        yield env.timeout(15)
+        if depot.level < 50:
+            yield depot.put(40)
+            print(f"[System] Clay refill (+40). Stock: {depot.level}")
 
 
-def processar_pote(env, pote, moldagem, esmaltacao, forno, pintura, deposito_argila, expedicao):
-    global total_fabricados
-    id_pote = pote["id"]
+def process_pot(env, pot, molding, glazing, oven, painting, clay_depot, shipping):
+    global total_manufactured
+    pot_id = pot["id"]
 
-    # --- ETAPA 1: MOLDAGEM (Consome Argila) ---
-    # Primeiro pega argila
-    yield deposito_argila.get(2)  # 2kg por pote
-
-    with moldagem.request() as req:
+    # --- STEP 1: MOLDING (consumes clay) ---
+    yield clay_depot.get(2)
+    with molding.request() as req:
         yield req
-        tempo_mold = random.uniform(3, 5)
-        yield env.timeout(tempo_mold)
+        mold_time = random.uniform(3, 5)
+        yield env.timeout(mold_time)
 
-    # --- ETAPA 2: ESMALTAÇÃO ---
-    with esmaltacao.request() as req:
+    # --- STEP 2: GLAZING ---
+    with glazing.request() as req:
         yield req
         yield env.timeout(2)
 
-    # --- ETAPA 3: FORNO (Lote) ---
-    # Põe no forno
-    yield forno.put(pote)
+    # --- STEP 3: OVEN (batch) ---
+    yield oven.put(pot)
+    if len(oven.items) >= 5:
+        print("[Oven] Starting batch firing with 5 items.")
+        yield env.timeout(10)
 
-    # Se forno cheio, queima
-    if len(forno.items) >= 5:
-        # Define líder do lote
-        print(f"[Forno] Iniciando queima de lote com 5 itens.")
-        yield env.timeout(10)  # Tempo de queima
-
-        # Esvazia o forno
-        lote_pronto = []
+        ready_batch = []
         for _ in range(5):
-            item = yield forno.get()
-            lote_pronto.append(item)
+            item = yield oven.get()
+            ready_batch.append(item)
 
-        # Dispara evento para liberar quem está esperando
-        if hasattr(forno, "batch_ready_event"):
-            forno.batch_ready_event.succeed(value=lote_pronto)
-            forno.batch_ready_event = env.event()
+        if hasattr(oven, "batch_ready_event"):
+            oven.batch_ready_event.succeed(value=ready_batch)
+            oven.batch_ready_event = env.event()
     else:
-        # Seguidores esperam
-        if not hasattr(forno, "batch_ready_event"):
-            forno.batch_ready_event = env.event()
-        yield forno.batch_ready_event
+        if not hasattr(oven, "batch_ready_event"):
+            oven.batch_ready_event = env.event()
+        yield oven.batch_ready_event
 
-    # --- ETAPA 4: PINTURA FINAL ---
-    with pintura.request() as req:
+    # --- STEP 4: FINAL PAINTING ---
+    with painting.request() as req:
         yield req
         yield env.timeout(2)
 
-    # --- ETAPA 5: EXPEDIÇÃO ---
-    # Deposita o produto final no estoque
-    yield expedicao.put(1)
+    # --- STEP 5: SHIPPING ---
+    yield shipping.put(1)
 
-    total_fabricados += 1
-    print(f"[Pote {id_pote}] CONCLUÍDO e Estocado. (Total: {total_fabricados})")
+    total_manufactured += 1
+    print(f"[Pot {pot_id}] COMPLETED and stocked. (Total: {total_manufactured})")
 
 
 def setup(env):
-    env.process(fabrica(env))
+    env.process(factory(env))
 
 
 if __name__ == "__main__":
-    # Inicia a visualização
     viz = SimPyVisualizer(setup_func=setup, title="Factory Simulation Example")
     viz.mainloop()
