@@ -1,27 +1,27 @@
-# gui.py
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import time
+from tkinter import ttk, messagebox
 import simpy
-from monkey_patch import recursos_rastreados, transferencias_pendentes
+from .monkey_patch import recursos_rastreados, transferencias_pendentes, apply_patch
+from .sim_manager import SimulationController
 import math
-import importlib.util
 import os
 import sys
 
-# Default simulation module (can be None)
-default_simu = None
-try:
-    import simu
-
-    default_simu = simu
-except ImportError:
-    pass
-
 
 class SimPyVisualizer(tk.Tk):
-    def __init__(self):
+    def __init__(self, setup_func=None, title="SimPy Visualizer"):
+        """
+        Initializes the SimPy Visualizer.
+
+        :param setup_func: A function that takes a simpy.Environment as its only argument
+                           and sets up the simulation (creats resources, processes, etc).
+        :param title: Window title.
+        """
+        # Garante que o patch esteja aplicado
+        apply_patch()
         super().__init__()
-        self.title("SimPy Visualizer")
+        self.title(title)
         self.geometry("1000x800")
 
         # Variáveis de Controle
@@ -32,41 +32,68 @@ class SimPyVisualizer(tk.Tk):
         self.offset_x = 0.0
         self.offset_y = 0.0
 
-        # Módulo de simulação atual
-        self.current_sim_module = default_simu
-        self.sim_file_path = "simu.py" if default_simu else ""
+        # Módulo de simulação atual / Função de setup
+        self.current_setup_func = setup_func
 
         # Controle de Animação
         self.obj_coords_cache = {}  # Cache para guardar (x, y) de cada objeto visual
         self.active_animations = []  # Lista de animações correndo
+        self.active_list_widgets = {}  # Dict {id(rec): widget_frame} para reutilizar widgets e manter scroll
+
+        # Variáveis para cálculo de FPS (Ticks/s)
+        self.last_tick_time = time.time()
+        self.tick_count = 0
+        self.last_fps_update = 0
 
         # Setup UI
         self._setup_top_bar()
         self._setup_canvas()
 
-        # Inicializa Simulação
-        if self.current_sim_module:
-            self.reset_simulation()
+        # Controller (separa lógica da simulação)
+        self.sim_ctrl = SimulationController(
+            draw_callback=lambda initial=False: (self.draw_scene(initial), self.update_idletasks()),
+            start_animations_cb=self.start_animations,
+            update_time_cb=self.update_time_display,
+            schedule_cb=lambda ms, fn: self.after(ms, fn),
+            speed_getter=lambda: self.scl_speed.get(),
+            on_pause_cb=lambda: self.ent_target.config(state="normal"),
+        )
+
+        # Inicializa Simulação se tiver setup function
+        if self.current_setup_func:
+            try:
+                self.sim_ctrl.reset(self.current_setup_func)
+            except Exception as e:
+                messagebox.showerror("Simulation Error", f"Error in setup():\n{e}")
+
+    def update_time_display(self, now):
+        """Atualiza o label de tempo e calcula ticks/s na interface."""
+        self.lbl_time.config(text=f"Time: {now:.2f}")
+
+        # Cálculo de Ticks/s (tps)
+        # self.sim_ctrl chama isso a cada step ou frame
+
+        current = time.time()
+
+        # Incrementa contador de chamadas entre atualizações do display
+        self.tick_count += 1
+
+        # Atualiza o display a cada 0.5 segundos para não ficar piscando
+        elapsed = current - self.last_fps_update
+        if elapsed >= 0.5:
+            # tps = steps / segundos
+            if elapsed > 0:
+                tps = self.tick_count / elapsed
+                self.lbl_speed_val.config(text=f"{tps:.1f} tps")
+
+            # Reset para próximo intervalo
+            self.last_fps_update = current
+            self.tick_count = 0
 
     def _setup_top_bar(self):
         # Frame principal da barra
         top_container = ttk.Frame(self)
         top_container.pack(side=tk.TOP, fill=tk.X)
-
-        # Barra de Arquivo (Nova)
-        file_bar = ttk.Frame(top_container, padding=5)
-        file_bar.pack(side=tk.TOP, fill=tk.X)
-
-        ttk.Label(file_bar, text="Simulation File:").pack(side=tk.LEFT, padx=5)
-
-        self.ent_file = ttk.Entry(file_bar, width=60)
-        self.ent_file.pack(side=tk.LEFT, padx=5)
-        if self.sim_file_path:
-            self.ent_file.insert(0, os.path.abspath(self.sim_file_path))
-        self.ent_file.config(state="readonly")
-
-        ttk.Button(file_bar, text="📂 Load...", command=self.browse_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(file_bar, text="🔄 Reload", command=self.reload_simulation_file).pack(side=tk.LEFT, padx=5)
 
         # Barra de Controles (Existente)
         bar = ttk.Frame(top_container, padding=5)
@@ -76,10 +103,25 @@ class SimPyVisualizer(tk.Tk):
         btn_frame = ttk.Frame(bar)
         btn_frame.pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(btn_frame, text="▶ Play", command=self.run_simulation).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="⏯ Step", command=self.run_single_step).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="⏸ Pause", command=self.pause_simulation).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="⏹ Reset", command=self.reset_simulation).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            btn_frame,
+            text="▶ Play",
+            command=lambda: (
+                self.ent_target.config(state="disabled"),
+                self.sim_ctrl.set_setup_func(self.current_setup_func),
+                setattr(
+                    self.sim_ctrl,
+                    "target_time",
+                    float(self.ent_target.get().strip()) if self.ent_target.get().strip() else float("inf"),
+                )
+                or self.sim_ctrl.run(),
+            ),
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="⏯ Step", command=lambda: (self.sim_ctrl.set_setup_func(self.current_setup_func), self.sim_ctrl.run_single_step())).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="⏸ Pause", command=lambda: (self.sim_ctrl.pause(), self.ent_target.config(state="normal"))).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="⏹ Reset", command=lambda: (self.sim_ctrl.reset(self.current_setup_func), self.ent_target.config(state="normal"), self.after(100, self.center_view))).pack(
+            side=tk.LEFT, padx=2
+        )
 
         # Display Time
         self.lbl_time = ttk.Label(bar, text="Time: 0.00", font=("Consolas", 14, "bold"))
@@ -95,6 +137,10 @@ class SimPyVisualizer(tk.Tk):
         self.scl_speed.set(50)
         self.scl_speed.pack(side=tk.LEFT)
 
+        # FPS / Ticks/s Label
+        self.lbl_speed_val = ttk.Label(spd_frame, text="0.0 tps", width=12)
+        self.lbl_speed_val.pack(side=tk.LEFT, padx=(5, 0))
+
         # Break Point Control
         right_frame = ttk.Frame(bar)
         right_frame.pack(side=tk.RIGHT, padx=5)
@@ -104,50 +150,29 @@ class SimPyVisualizer(tk.Tk):
         self.ent_target.insert(0, "100")
         self.ent_target.pack(side=tk.LEFT)
 
-    def browse_file(self):
-        path = filedialog.askopenfilename(filetypes=[("Python Files", "*.py")])
-        if path:
-            # Tenta carregar ANTES de atualizar a UI
-            if self.load_module_from_path(path):
-                self.ent_file.config(state="normal")
-                self.ent_file.delete(0, tk.END)
-                self.ent_file.insert(0, path)
-                self.ent_file.config(state="readonly")
-                self.sim_file_path = path
-                self.reset_simulation()
+    def update_time_display(self, now):
+        """Atualiza o label de tempo e calcula ticks/s na interface."""
+        self.lbl_time.config(text=f"Time: {now:.2f}")
 
-    def reload_simulation_file(self):
-        path = self.ent_file.get()
-        if self.load_module_from_path(path):
-            self.sim_file_path = path
-            self.reset_simulation()
+        # Cálculo de Ticks/s (tps)
+        # self.sim_ctrl chama isso a cada step ou frame
 
-    def load_module_from_path(self, path):
-        if not path or not os.path.exists(path):
-            messagebox.showerror("Error", "File not found!")
-            return False
+        current = time.time()
 
-        try:
-            # Dynamic module loading
-            module_name = os.path.splitext(os.path.basename(path))[0]
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = module
-                spec.loader.exec_module(module)
+        # Incrementa contador de chamadas entre atualizações do display
+        self.tick_count += 1
 
-                if not hasattr(module, "setup"):
-                    messagebox.showerror("Error", "The file must contain a 'setup(env)' function.")
-                    return False
+        # Atualiza o display a cada 0.5 segundos para não ficar piscando
+        elapsed = current - self.last_fps_update
+        if elapsed >= 0.5:
+            # tps = steps / segundos
+            if elapsed > 0:
+                tps = self.tick_count / elapsed
+                self.lbl_speed_val.config(text=f"{tps:.1f} tps")
 
-                self.current_sim_module = module
-                return True
-            else:
-                messagebox.showerror("Error", "Could not load module spec.")
-                return False
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load file:\n{e}")
-            return False
+            # Reset para próximo intervalo
+            self.last_fps_update = current
+            self.tick_count = 0
 
     def _setup_canvas(self):
         self.canvas_frame = tk.Frame(self)  # Container for canvas + floating buttons
@@ -165,6 +190,7 @@ class SimPyVisualizer(tk.Tk):
         # Binds
         self.canvas.bind("<ButtonPress-1>", self.on_canvas_click)
         self.canvas.bind("<B1-Motion>", self.do_pan)
+        self.canvas.bind("<ButtonRelease-1>", self.stop_pan)  # Necessário para restaurar estado se escondermos algo
         self.canvas.bind("<MouseWheel>", self.do_zoom)
         self.canvas.bind("<Button-4>", self.do_zoom)
         self.canvas.bind("<Button-5>", self.do_zoom)
@@ -175,18 +201,31 @@ class SimPyVisualizer(tk.Tk):
         cy = self.canvas.canvasy(event.y)
 
         # Verifica clique nos botões de expandir
-        # Procura tags 'expand_btn'
         clicked_items = self.canvas.find_overlapping(cx, cy, cx + 1, cy + 1)
+
         for item in clicked_items:
             tags = self.canvas.gettags(item)
             for tag in tags:
                 if tag.startswith("btn_expand_"):
-                    # Extrai o índice do recurso
-                    idx = int(tag.split("_")[-1])
-                    rec = recursos_rastreados[idx]
-                    if hasattr(rec, "is_expanded"):
-                        rec.is_expanded = not rec.is_expanded
-                        self.draw_scene()
+                    # Extrai o ID do objeto recurso
+                    try:
+                        obj_id = int(tag.split("_")[-1])
+
+                        # Procura o objeto no conjunto rastreado pelo ID
+                        target_rec = None
+                        for r in recursos_rastreados:
+                            if id(r) == obj_id:
+                                target_rec = r
+                                break
+
+                        if target_rec:
+                            # Toggle expand state
+                            current_state = getattr(target_rec, "is_expanded", False)
+                            target_rec.is_expanded = not current_state
+                            self.draw_scene()
+
+                    except (ValueError, IndexError):
+                        pass
                     return
 
         # Se não clicou em botão, inicia o Pan
@@ -197,10 +236,22 @@ class SimPyVisualizer(tk.Tk):
         self.pan_start_x = event.x
         self.pan_start_y = event.y
 
+    def stop_pan(self, event):
+        # Restaura visibilidade e corrige posição final
+        # Ao restaurar state, o canvas vai desenhar na nova posição correta
+        pass
+
+        # Opcional: draw_scene completo para garantir alinhamento perfeito de fontes
+        # self.draw_scene()
+
     def do_pan(self, event):
         # Calcula o deslocamento
         dx = event.x - self.pan_start_x
         dy = event.y - self.pan_start_y
+
+        # Define limite mínimo para mover (deadzone) para evitar tremedeira em cliques simples
+        if abs(dx) < 2 and abs(dy) < 2:
+            return
 
         # Move todos os objetos do canvas visualmente
         self.canvas.move("all", dx, dy)
@@ -214,8 +265,11 @@ class SimPyVisualizer(tk.Tk):
         self.pan_start_y = event.y
 
     def do_zoom(self, event):
-        x = self.canvas.canvasx(event.x)
-        y = self.canvas.canvasy(event.y)
+        # Zoom correto exige redesenho de widgets complexos (Listbox) que não escalam com canvas.scale
+        # Calcula onde o mouse está no MUNDO (relativo ao conteúdo sem offset)
+        # MundoX = (MouseX - OffsetX) / ZoomAntigo
+        world_x = (event.x - self.offset_x) / self.scale
+        world_y = (event.y - self.offset_y) / self.scale
 
         if event.delta > 0 or event.num == 4:
             factor = 1.1
@@ -223,14 +277,19 @@ class SimPyVisualizer(tk.Tk):
             factor = 0.9
 
         new_scale = self.scale * factor
-        # Allow wider zoom range for "close up" views or "far away" views
-        if new_scale < 0.1 or new_scale > 10.0:
+        # Limites de zoom
+        if new_scale < 0.1 or new_scale > 5.0:
             return
 
         self.scale = new_scale
-        self.canvas.scale("all", x, y, factor, factor)
-        # We don't restrict scrollregion here anymore to allow free panning
-        # self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+        # Recalcula Offset para manter o ponto do mouse fixo
+        # NovoOffsetX = MouseX - (WorldX * NovoZoom)
+        self.offset_x = event.x - (world_x * self.scale)
+        self.offset_y = event.y - (world_y * self.scale)
+
+        # Redesenha tudo com a nova escala e offsets
+        self.draw_scene()
 
     def center_view(self):
         # 1. Reseta para escala 1.0 para calcular BBox 'original'
@@ -300,129 +359,45 @@ class SimPyVisualizer(tk.Tk):
             # Atualiza offsets para persistir a centralização
             self.offset_x = dx
             self.offset_y = dy
-        transferencias_pendentes.clear()
+
+        # Limpa transferências pendentes para evitar bolinhas voando na tela de reset
+        if transferencias_pendentes:
+            transferencias_pendentes.clear()
+
         self.active_animations = []
         self.obj_coords_cache = {}
 
     def reset_simulation(self):
-        self.running = False
-        recursos_rastreados.clear()
-
-        # Reseta zoom e pan
-        self.scale = 1.0
-        self.offset_x = 0.0
-        self.offset_y = 0.0
-
-        if not self.current_sim_module:
-            return
-
-        # Reinicia ambiente SimPy e Setup do usuário
-        self.env = simpy.Environment()
-
-        try:
-            self.current_sim_module.setup(self.env)
-        except Exception as e:
-            messagebox.showerror("Simulation Error", f"Error in setup():\n{e}")
-            return
-
-        self.ent_target.config(state="normal")
-        self.lbl_time.config(text="Time: 0.00")
-
-        self.canvas.delete("all")
-        self.draw_scene(initial=True)
-        # Center view on reset after specific delay to ensure canvas is ready
-        self.after(100, self.center_view)
+        # Removed: simulation management moved to SimulationController
+        pass
 
     def run_simulation(self):
-        if not self.running:
-            self.running = True
-            self.ent_target.config(state="disabled")
-
-            val = self.ent_target.get().strip()
-            if not val:
-                self.target_time = float("inf")  # Infinite run
-            else:
-                try:
-                    self.target_time = float(val)
-                except ValueError:
-                    self.target_time = float("inf")
-
-            self.step()
+        # Removed: moved to SimulationController
+        pass
 
     def run_single_step(self):
-        self.running = False
-        self.ent_target.config(state="normal")
-        try:
-            if self.env.peek() != simpy.core.Infinity:
-                self.env.step()
-                self.draw_scene()
-
-                # Checa se houve movimento e anima
-                if transferencias_pendentes:
-                    # Calcula duração baseado no slider
-                    val = self.scl_speed.get()
-                    delay_ms = int(1000 * (0.001 ** (val / 100.0)))
-                    delay_ms = max(1, delay_ms)
-
-                    transfers = list(transferencias_pendentes)
-                    transferencias_pendentes.clear()
-                    self.start_animations(transfers, delay_ms)
-
-        except simpy.core.EmptySchedule:
-            pass
+        # Removed: moved to SimulationController
+        pass
 
     def pause_simulation(self):
-        self.running = False
-        self.ent_target.config(state="normal")
+        # Removed: moved to SimulationController
+        pass
 
     def step(self):
-        if not self.running:
-            self.ent_target.config(state="normal")
-            return
-
-        if self.env.peek() == simpy.core.Infinity or self.env.now >= self.target_time:
-            self.running = False
-            self.ent_target.config(state="normal")
-            return
-
-        try:
-            self.env.step()
-        except simpy.core.EmptySchedule:
-            self.running = False
-            self.ent_target.config(state="normal")
-            return
-
-        self.draw_scene()
-
-        # Pega o valor do slider (0 a 100)
-        val = self.scl_speed.get()
-
-        # Converte para Delay em ms usando escala LOGARÍTMICA
-        # 0 -> 1000ms (Lento)
-        # 100 -> 1ms (Rápido)
-        # Fórmula: Delay = 1000 * (1/1000)^(val/100)
-        delay_ms = int(1000 * (0.001 ** (val / 100.0)))
-        # Garante mínimo de 1ms
-        delay_ms = max(1, delay_ms)
-
-        # --- PROCESSA ANIMAÇÕES ---
-        # Verifica se houve transferências capturadas no monkey_patch
-        if transferencias_pendentes:
-            # Clona a lista para animar
-            transfers = list(transferencias_pendentes)
-            transferencias_pendentes.clear()
-
-            # Inicia animação. O delay_ms será o tempo total da animação
-            # A animação deve terminar antes do próximo step, ou junto com ele.
-            self.start_animations(transfers, delay_ms)
-
-        self.after(delay_ms, self.step)
+        # Removed: moved to SimulationController
+        pass
 
     def start_animations(self, transfers, duration_ms):
         """Inicia uma animação suave de bolinhas voando entre recursos"""
-        # Taxa de atualização: 30fps = ~33ms
-        step_time = 33
-        frames = max(1, int(duration_ms / step_time))
+        # Adapta taxa de atualização para duração
+        target_step_time = 33  # ~30fps
+
+        if duration_ms < target_step_time:
+            step_time = max(1, duration_ms)
+            frames = 1
+        else:
+            step_time = target_step_time
+            frames = int(duration_ms / step_time)
 
         anim_objs = []
         for t in transfers:
@@ -470,9 +445,21 @@ class SimPyVisualizer(tk.Tk):
 
     def draw_scene(self, initial=False):
         if not initial:
+            # Ao deletar "all", os items create_window somem do canvas,
+            # mas os Widgets Tkinter (Frames/Listboxes) associados continuam existindo na memória.
+            # Precisamos gerenciá-los manualmente:
+            # - Se o recurso ainda está expandido, queremos REUTILIZAR o widget (para manter scroll).
+            # - Se o recurso foi fechado ou removeu, destruímos o widget.
             self.canvas.delete("all")
 
-        self.lbl_time.config(text=f"Time: {self.env.now:.2f}")
+        # Identifica quais widgets estão ativos antes do desenho
+        previously_active_ids = set(self.active_list_widgets.keys())
+        currently_active_ids = set()
+
+        now = 0.0
+        if hasattr(self, "sim_ctrl") and self.sim_ctrl.env is not None:
+            now = self.sim_ctrl.env.now
+        self.lbl_time.config(text=f"Time: {now:.2f}")
 
         # Posição inicial considerando o PAN acumulado
         start_x = (50 * self.scale) + self.offset_x
@@ -481,69 +468,20 @@ class SimPyVisualizer(tk.Tk):
         # Dimensões do Bloco + Margem
         block_w = 300 * self.scale
         block_h = 100 * self.scale
-        margin_x = 20 * self.scale
-        margin_y = 20 * self.scale
-
-        step_x = block_w + margin_x
-        step_y = block_h + margin_y
-
-        total = len(recursos_rastreados)
-
-        # Configurações de Dimensões Base
-        base_w = 300 * self.scale
-        base_h = 100 * self.scale
         margin = 20 * self.scale
 
-        # Grid System Flexível
-        # Em vez de calcular posição fixa (row, col) baseada apenas no índice,
-        # precisamos de um "flow layout" que respeite a altura variável dos blocos.
-        # Vamos usar um sistema de colunas onde preenchemos a coluna mais curta ou sequencialmente.
+        # Snapshot para evitar modificação durante iteração e para ter ordem estável se possível
+        # Convertemos WeakSet para lista
+        lista_recursos = list(recursos_rastreados)
+        # Ordenamos por nome para estabilidade visual, se possível, ou ID
+        # Como 'nome_visual' é adicionado pelo patch, podemos usar.
+        lista_recursos.sort(key=lambda r: getattr(r, "nome_visual", str(id(r))))
 
-        # Para simplificar e manter a identidade visual do pedido anterior (quadrado/retângulo):
-        # Vamos definir a largura da coluna fixa, e a altura da linha dinâmica.
-        # MAS, alinhar alturas variáveis em grid estrito é difícil.
-        # Vamos usar a abordagem: Grid com células, onde um item expandido ocupa células verticais extras.
+        total = len(lista_recursos)
 
-        if total <= 36:
-            cols = math.ceil(math.sqrt(total))
-            if cols == 0:
-                cols = 1
-        else:
-            # Fixa 6 linhas (neste caso, altura do grid) -> isso complica se a altura do item varia.
-            # Se a altura varia, "6 linhas" deixa de fazer sentido geométrico simples.
-            # Vamos manter a lógica de colunas fixas para o modo "quadrado" e
-            # linhas fixas para o modo "retângulo", mas adaptando a posição Y.
-
-            # Melhor abordagem: Flow Layout (Masonry simplificado) ou Linha a Linha estrita.
-            # Vamos usar Linha a Linha estrita (Row-Major), mas calculando a altura máxima da linha?
-            # Não, o usuário quer que "mova os demais blocos".
-
-            # Vamos simplificar: Usar um layout de colunas fixas e empilhar itens (Masonry vertical)
-            # ou usar Linhas fixas e empilhar horizontamente?
-
-            # Voltando ao pedido original: "quadrado perfeito" ou "6 de altura".
-            # Vamos assumir o Grid Lógico (row, col) calculado anteriormente.
-            # Porém, se um item [r, c] expande, ele empurra os itens [r+1, c], [r+2, c] para baixo?
-            # Ou ele empurra todo o grid?
-
-            # Abordagem escolhida: Grid Fluido.
-            # Calculamos (row, col) lógicos.
-            # A posição Y de cada item será baseada na altura acumulada daquela coluna + margem.
-
-            rows_fixed = 6  # Para o modo > 36
-            cols_fixed = math.ceil(total / rows_fixed)
-
-            if total <= 36:
-                num_cols = math.ceil(math.sqrt(total))
-                if num_cols == 0:
-                    num_cols = 1
-            else:
-                # No modo retangulo, cresce para a direita.
-                # Então o número de linhas é fixo (6), colunas varia.
-                # Mas o preenchimento é "coluna por coluna".
-                # Logo, cada COLUNA tem uma lista de itens.
-                num_cols = cols_fixed  # Isso é dinâmico no loop
-                pass
+        # Se não há recursos, não desenha nada
+        if total == 0:
+            return
 
         # Estrutura para calcular posições
         # col_heights[c] = y_atual
@@ -558,7 +496,7 @@ class SimPyVisualizer(tk.Tk):
             fixed_rows = 6
 
         # Calcular onde cada item vai ficar
-        for i, rec in enumerate(recursos_rastreados):
+        for i, rec in enumerate(lista_recursos):
             # 1. Determina Coluna e Linha Lógicas
             if mode == "SQUARE":
                 row_logical = i // grid_dim
@@ -569,34 +507,45 @@ class SimPyVisualizer(tk.Tk):
                 col_logical = i // fixed_rows
 
             # 2. Calcula Altura do Item Atual
-            h_atual = base_h
-            if hasattr(rec, "is_expanded") and rec.is_expanded:
+            base_h_scaled = 100 * self.scale
+            h_atual = base_h_scaled
+
+            if getattr(rec, "is_expanded", False):
                 # Altura = 2 blocos + margem
-                h_atual = (base_h * 2) + margin
+                h_atual = (base_h_scaled * 2) + margin
 
             # 3. Calcula Posição X (Baseada na coluna lógica)
             # Largura da coluna é fixa baseada no bloco mais largo (que é padrão)
-            col_width = base_w + margin
+            col_width = (300 * self.scale) + margin
             x = start_x + (col_logical * col_width)
 
-            # 4. Calcula Posição Y (Baseada no acumulado da coluna OU linha anterior)
-            # Se estamos em SQUARE: preenche linha por linha.
-            # O problema é que se o item da col 0 expandir, e o da col 1 não, a linha de baixo fica desalinhada visualmente.
-            # Para ficar bonito (Masonry), vamos acumular alturas por coluna.
-
+            # 4. Calcula Posição Y
             if col_logical not in col_y_offsets:
                 col_y_offsets[col_logical] = start_y
 
             y = col_y_offsets[col_logical]
 
             # Desenha
-            self._draw_block_for_resource(rec, x, y, i)
+            # Precisa passar índice na lista gerada agora, pois o índice do enumerate corresponde a ela
+            # Passamos também currently_active_ids para rastrear widgets usados
+            self._draw_block_for_resource(rec, x, y, i, lista_recursos, currently_active_ids)
 
             # Atualiza Y da próxima linha nessa coluna
             col_y_offsets[col_logical] += h_atual + margin
 
-    def _draw_block_for_resource(self, rec, x, y, index):
-        margin_bg = 0  # Margem interna visual
+        # Limpa widgets que não foram usados neste frame (ex: usuário fechou o recurso)
+        for rid in previously_active_ids:
+            if rid not in currently_active_ids:
+                # O widget não foi incluído no desenho, então ele não é mais visível
+                # Destrói o Tk Frame
+                widget = self.active_list_widgets.get(rid)
+                if widget:
+                    widget.destroy()
+                del self.active_list_widgets[rid]
+
+    def _draw_block_for_resource(self, rec, x, y, index, current_list, currently_active_ids):
+        # index: índice na lista 'current_list' usada no draw_scene
+        # currently_active_ids: set para registrar widgets usados neste frame
 
         # Altura base (colapsado)
         base_h = 100 * self.scale
@@ -656,8 +605,8 @@ class SimPyVisualizer(tk.Tk):
             symbol = "▲" if expanded else "▼"
 
             # Fundo Botão
-            # Tag 'btn_expand_IDX' identifica qual recurso expandir
-            btn_tag = f"btn_expand_{recursos_rastreados.index(rec)}"
+            # Tag 'btn_expand_ID' identifica qual recurso expandir baseando-se no id do objeto
+            btn_tag = f"btn_expand_{id(rec)}"
             self.canvas.create_rectangle(bx, by, bx + btn_sz, by + btn_sz, fill="white", outline="black", tags=(btn_tag,))
             self.canvas.create_text(bx + btn_sz / 2, by + btn_sz / 2, text=symbol, font=("Segoe UI", int(10 * self.scale)), tags=(btn_tag,))
 
@@ -665,7 +614,9 @@ class SimPyVisualizer(tk.Tk):
         font_title = ("Segoe UI", int(12 * self.scale), "bold")
         font_sub = ("Segoe UI", int(9 * self.scale), "italic")
 
-        self.canvas.create_text(x + 10 * self.scale, y + 20 * self.scale, text=rec.nome_visual, anchor="w", font=font_title)
+        # Nome visual garantido pelo patch
+        nome = getattr(rec, "nome_visual", "Resource")
+        self.canvas.create_text(x + 10 * self.scale, y + 20 * self.scale, text=nome, anchor="w", font=font_title)
         self.canvas.create_text(x + 10 * self.scale, y + 40 * self.scale, text=f"{tipo} (Cap: {cap})", anchor="w", font=font_sub)
 
         # Barra
@@ -687,26 +638,87 @@ class SimPyVisualizer(tk.Tk):
         self.canvas.create_text(bar_x + bar_w / 2, bar_y + bar_h / 2, text=f"{ocupados}/{cap}", font=font_bar)
 
         # --- Conteudo Expandido (Lista de Itens) ---
-        if expanded and items:
+        if expanded:
+            rec_id = id(rec)
             list_y = y + 100 * self.scale  # Começa onde terminaria o bloco normal
-            list_h_avail = h - (100 * self.scale) - (10 * self.scale)
+            list_w = w - 20 * self.scale
+            list_h = h - (110 * self.scale)
 
-            # Fundo da lista
-            self.canvas.create_rectangle(x + 10 * self.scale, list_y, x + w - 10 * self.scale, y + h - 10 * self.scale, fill="#f9f9f9", outline="#ccc")
+            # Reutiliza Widget ou Cria Novo
+            if rec_id in self.active_list_widgets:
+                # Reutilizar
+                frame_container = self.active_list_widgets[rec_id]
+                try:
+                    # Tenta recuperar listbox. A ordem children é: barH, Box, barV (depende do pack).
+                    # Mas podemos usar winfo_children() e filtrar por Type se necessário.
+                    # Pelo código abaixo de criação: sb_v, sb_h, lbox são packed.
+                    # A ordem em winfo_children segue a criação: sb_v(0), sb_h(1), lbox(2)
+                    lbox = frame_container.winfo_children()[2]
+                except IndexError:
+                    # Fallback
+                    lbox = None
+            else:
+                lbox = None
+                frame_container = None
 
-            # Itens
-            font_list = ("Consolas", int(9 * self.scale))
-            max_lines = 5  # Cabe uns 5 itens
-            for k, item in enumerate(items[:max_lines]):
-                ly = list_y + (k * 15 * self.scale) + 10 * self.scale
-                # Tenta mostrar algo útil do item (str ou repr)
-                txt = str(item)
-                if len(txt) > 40:
-                    txt = txt[:37] + "..."
-                self.canvas.create_text(x + 15 * self.scale, ly, text=txt, anchor="w", font=font_list, fill="#333")
+            # Calcula Lbox Font
+            lbox_font = ("Consolas", int(9 * self.scale)) if self.scale > 0.5 else ("Consolas", 8)
 
-            if len(items) > max_lines:
-                self.canvas.create_text(x + w / 2, y + h - 15 * self.scale, text=f"...e mais {len(items)-max_lines}", font=("Segoe UI", int(8 * self.scale), "italic"), fill="#888")
+            if frame_container is None or lbox is None:
+                # Criar Novo
+                frame_container = tk.Frame(self.canvas, bg="white", bd=1, relief="solid")
+                sb_v = tk.Scrollbar(frame_container, orient=tk.VERTICAL)
+                sb_h = tk.Scrollbar(frame_container, orient=tk.HORIZONTAL)
+
+                lbox = tk.Listbox(frame_container, yscrollcommand=sb_v.set, xscrollcommand=sb_h.set, font=lbox_font, bg="#f9f9f9", bd=0, highlightthickness=0)
+                sb_v.config(command=lbox.yview)
+                sb_h.config(command=lbox.xview)
+                sb_v.pack(side=tk.RIGHT, fill=tk.Y)
+                sb_h.pack(side=tk.BOTTOM, fill=tk.X)
+                lbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+                self.active_list_widgets[rec_id] = frame_container
+            else:
+                # Atualiza fonte e tamanho se já existir
+                lbox.config(font=lbox_font)
+
+            # Atualiza Conteúdo da Listbox sem perder posição do scroll
+            # Pega lista de itens atuais
+            current_items_str = [str(item) for item in items] if items else ["(Vazio)"]
+
+            # Pega lista no widget
+            # Listbox.get(0, END) retorna tupla de strings
+            displayed_items = lbox.get(0, tk.END)
+
+            # Se diferente, atualiza.
+            if displayed_items != tuple(current_items_str):
+                # Guarda posição do scroll atual (fração 0.0 a 1.0)
+                y_scroll_pos = lbox.yview()
+                x_scroll_pos = lbox.xview()
+
+                # Simples: deleta tudo e insere novo conjunto
+                lbox.delete(0, tk.END)
+                for s in current_items_str:
+                    lbox.insert(tk.END, s)
+
+                if not items:
+                    lbox.config(fg="#888")
+                else:
+                    lbox.config(fg="black")
+
+                # Restaura scroll
+                try:
+                    lbox.yview_moveto(y_scroll_pos[0])
+                    lbox.xview_moveto(x_scroll_pos[0])
+                except:
+                    pass
+
+            # Adiciona ao Canvas (create_window)
+            # Como deletamos "all" no começo, precisamos recriar o item do canvas apontando para o widget existente
+            win_item = self.canvas.create_window(x + 10 * self.scale, list_y, width=list_w, height=list_h, anchor="nw", window=frame_container, tags=("window_widget",))
+
+            # Marca como ativo neste frame
+            currently_active_ids.add(rec_id)
 
         # Filas (Indicadores)
         r = 15 * self.scale
@@ -726,8 +738,7 @@ class SimPyVisualizer(tk.Tk):
                 self.canvas.create_text(cx, cy + r + 7 * self.scale, text="GET", font=label_font)
         else:
             if get_q > 0:
-                cx = x + w - 30 * self.scale
-                cy = y + 25 * self.scale
-                self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#C0392B", outline="white", width=2)
+                cx, cy = x + w - 30 * self.scale, y + 20 * self.scale
+                self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill="#E67E22", outline="white", width=2)
                 self.canvas.create_text(cx, cy, text=str(get_q), fill="white", font=badge_font)
-                self.canvas.create_text(cx, cy + r + 8 * self.scale, text="FILA", font=label_font)
+                self.canvas.create_text(cx, cy + r + 7 * self.scale, text="Q", font=label_font)

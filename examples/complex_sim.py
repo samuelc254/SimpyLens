@@ -1,6 +1,9 @@
-# simu2.py
 import simpy
 import random
+import sys
+import os
+
+from simpy_visualizer import SimPyVisualizer
 
 # CONFIGURAÇÃO DE LOGS
 VERBOSE = False
@@ -173,3 +176,9 @@ def processo_paciente(env, p, recepcao, triagem, sala_espera, consultorio, lab, 
 
 def setup(env):
     env.process(hospital_run(env))
+
+
+if __name__ == "__main__":
+    # Inicia a visualização
+    viz = SimPyVisualizer(setup_func=setup, title="Hospital Complex Simulation")
+    viz.mainloop()
