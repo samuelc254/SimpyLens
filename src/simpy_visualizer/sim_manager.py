@@ -1,3 +1,4 @@
+import json
 import simpy
 import time
 from .monkey_patch import pending_transfers, tracked_resources, step_logs
@@ -8,7 +9,7 @@ class SimulationController:
         """Controller that manages the SimPy Environment and stepping logic.
 
         - draw_callback(initial=False): function to ask the GUI to redraw
-        - start_animations_cb(transfers, duration_ms): GUI animation starter
+        - start_animations_cb(transfers, duration_ms, on_complete=None): GUI animation starter
         - update_time_cb(now): updates time display in GUI
         - schedule_cb(ms, func): schedules a callable after ms milliseconds (GUI's after)
         - speed_getter(): returns integer slider value 0..100 used to compute delay
@@ -37,8 +38,9 @@ class SimulationController:
 
         self.running = False
         tracked_resources.clear()
+        pending_transfers.clear()
         step_logs.clear()
-        self.log_callback(["--- Simulation Reset ---"])
+        self.log_callback([json.dumps({"kind": "STATUS", "event": "RESET", "time": 0.0}, ensure_ascii=False, sort_keys=True)])
 
         if not self._setup_func:
             self.env = None
@@ -128,16 +130,7 @@ class SimulationController:
             self.on_pause_cb()
             return
 
-        # Check target time post-step
-        if self.env.now >= self.target_time:
-            self.running = False
-            self.update_time_cb(self.env.now)
-            self.draw_callback()
-            if step_logs:
-                self.log_callback(list(step_logs))
-                step_logs.clear()
-            self.on_pause_cb()
-            return
+        should_pause_after_cycle = self.env.now >= self.target_time
 
         self.update_time_cb(self.env.now)
         self.draw_callback()
@@ -147,17 +140,23 @@ class SimulationController:
             step_logs.clear()
 
         target_delay_ms = self._compute_delay_ms()
-
-        # Handle pending transfers
+        transfers = []
         if pending_transfers:
             transfers = list(pending_transfers)
             pending_transfers.clear()
-            # Animation duration matches the step interval
-            self.start_animations_cb(transfers, target_delay_ms)
 
-        # Calculate time spent processing + drawing
-        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        def finish_cycle():
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-        # Schedule next step adjusting for elapsed time to maintain constant target delay
-        wait_ms = max(1, int(target_delay_ms - elapsed_ms))
-        self.schedule_cb(wait_ms, self.step)
+            if should_pause_after_cycle or not self.running:
+                self.running = False
+                self.on_pause_cb()
+                return
+
+            wait_ms = max(1, int(target_delay_ms - elapsed_ms))
+            self.schedule_cb(wait_ms, self.step)
+
+        if transfers:
+            self.start_animations_cb(transfers, target_delay_ms, on_complete=finish_cycle)
+        else:
+            finish_cycle()

@@ -1,9 +1,13 @@
 from .monkey_patch import tracked_resources, pending_transfers, apply_patch
 from .sim_manager import SimulationController
+import json
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 import math
+import weakref
+import gc
+from pathlib import Path
 
 
 class SimPyVisualizer(tk.Tk):
@@ -29,9 +33,29 @@ class SimPyVisualizer(tk.Tk):
 
         self.current_setup_func = setup_func
 
-        self.obj_coords_cache = {}
+        self.obj_coords_cache = weakref.WeakKeyDictionary()
         self.active_animations = []
         self.active_list_widgets = {}
+        self.manual_block_positions = weakref.WeakKeyDictionary()
+        self.resource_world_positions = weakref.WeakKeyDictionary()
+        self.resource_block_bounds = weakref.WeakKeyDictionary()
+        self.resource_draw_order = []
+        self.dragged_resource = None
+        self.drag_start_canvas_x = 0
+        self.drag_start_canvas_y = 0
+        self.drag_start_world_x = 0.0
+        self.drag_start_world_y = 0.0
+        self.pan_active = False
+        self.context_menu_resource = None
+        self.right_press_resource = None
+        self.right_press_canvas_x = 0.0
+        self.right_press_canvas_y = 0.0
+        self.right_press_root_x = 0
+        self.right_press_root_y = 0
+        self.right_press_moved = False
+        self.manual_layout_by_name = {}
+        self.layout_config_path = self._resolve_layout_config_path()
+        self._load_manual_layout_cache()
 
         self.last_tick_time = time.time()
         self.tick_count = 0
@@ -41,6 +65,13 @@ class SimPyVisualizer(tk.Tk):
         self.log_collapsed = False
         self.log_widget = None
         self.max_log_lines = 2000
+        self.log_search_var = tk.StringVar(value="")
+        self.log_search_matches = []
+        self.log_search_index = -1
+        self.log_resize_start_y = None
+        self.log_resize_start_height = 0
+        self.log_content_min_height = 100
+        self.log_content_max_height = 600
 
         self._setup_top_bar()
         self._setup_log_panel()
@@ -59,8 +90,55 @@ class SimPyVisualizer(tk.Tk):
         if self.current_setup_func:
             try:
                 self.sim_ctrl.reset(self.current_setup_func)
+                self.after(100, self.center_view)
             except Exception as exc:
                 messagebox.showerror("Simulation Error", f"Error in setup():\n{exc}")
+
+    def _resolve_layout_config_path(self):
+        setup_path = None
+        if self.current_setup_func and hasattr(self.current_setup_func, "__code__"):
+            setup_path = Path(self.current_setup_func.__code__.co_filename).resolve()
+
+        if setup_path is not None:
+            return setup_path.parent / f".{setup_path.stem}.simpy_layout.json"
+
+        return Path.cwd() / ".simpy_layout.json"
+
+    def _load_manual_layout_cache(self):
+        self.manual_layout_by_name = {}
+        cfg = self.layout_config_path
+        if not cfg.exists():
+            return
+
+        try:
+            payload = json.loads(cfg.read_text(encoding="utf-8"))
+            items = payload.get("manual_positions", {})
+            if isinstance(items, dict):
+                for name, coords in items.items():
+                    if isinstance(coords, (list, tuple)) and len(coords) == 2:
+                        self.manual_layout_by_name[str(name)] = (float(coords[0]), float(coords[1]))
+        except Exception:
+            self.manual_layout_by_name = {}
+
+    def _save_manual_layout_cache(self):
+        positions = {name: [float(coords[0]), float(coords[1])] for name, coords in self.manual_layout_by_name.items() if coords and len(coords) == 2}
+        for resource in list(tracked_resources):
+            if resource not in self.manual_block_positions:
+                continue
+            coords = self.manual_block_positions.get(resource)
+            if not coords or len(coords) != 2:
+                continue
+            name = getattr(resource, "visual_name", None)
+            if not name:
+                continue
+            positions[str(name)] = [float(coords[0]), float(coords[1])]
+
+        self.manual_layout_by_name = {name: (coords[0], coords[1]) for name, coords in positions.items()}
+        payload = {"manual_positions": positions}
+        try:
+            self.layout_config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception:
+            pass
 
     def _setup_top_bar(self):
         top_container = ttk.Frame(self)
@@ -159,6 +237,12 @@ class SimPyVisualizer(tk.Tk):
         self.bottom_panel = ttk.Frame(self, relief="raised", borderwidth=1)
         self.bottom_panel.pack(side=tk.BOTTOM, fill=tk.X)
 
+        self.log_resize_handle = tk.Frame(self.bottom_panel, height=5, bg="#d0d0d0", cursor="sb_v_double_arrow")
+        self.log_resize_handle.pack(side=tk.TOP, fill=tk.X)
+        self.log_resize_handle.bind("<ButtonPress-1>", self._start_log_resize)
+        self.log_resize_handle.bind("<B1-Motion>", self._do_log_resize)
+        self.log_resize_handle.bind("<ButtonRelease-1>", self._stop_log_resize)
+
         header_frame = ttk.Frame(self.bottom_panel)
         header_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
 
@@ -166,10 +250,22 @@ class SimPyVisualizer(tk.Tk):
         self.btn_toggle_log.pack(side=tk.LEFT)
 
         ttk.Checkbutton(header_frame, text="Enable Logging", variable=self.log_enabled).pack(side=tk.LEFT, padx=10)
-        ttk.Button(header_frame, text="Clear", command=self.clear_log).pack(side=tk.LEFT, padx=5)
+        self.btn_clear_log = ttk.Button(header_frame, text="Clear", command=self.clear_log)
+        self.btn_clear_log.pack(side=tk.LEFT, padx=5)
 
-        self.log_content_frame = ttk.Frame(self.bottom_panel)
-        self.log_content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.log_find_frame = ttk.Frame(header_frame)
+        self.log_find_frame.pack(side=tk.RIGHT)
+        ttk.Label(self.log_find_frame, text="Find:").pack(side=tk.LEFT, padx=(0, 4))
+        self.ent_log_find = ttk.Entry(self.log_find_frame, textvariable=self.log_search_var, width=22)
+        self.ent_log_find.pack(side=tk.LEFT)
+        self.ent_log_find.bind("<KeyRelease>", self._on_log_find_changed)
+        self.ent_log_find.bind("<Return>", self.find_next_log)
+        ttk.Button(self.log_find_frame, text="◀", width=3, command=self.find_prev_log).pack(side=tk.LEFT, padx=(4, 2))
+        ttk.Button(self.log_find_frame, text="▶", width=3, command=self.find_next_log).pack(side=tk.LEFT)
+
+        self.log_content_frame = ttk.Frame(self.bottom_panel, height=180)
+        self.log_content_frame.pack(side=tk.TOP, fill=tk.X)
+        self.log_content_frame.pack_propagate(False)
 
         scrollbar = ttk.Scrollbar(self.log_content_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -184,16 +280,36 @@ class SimPyVisualizer(tk.Tk):
             yscrollcommand=scrollbar.set,
         )
         self.txt_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.txt_log.tag_configure("log_find_match", background="#FFF59D")
+        self.txt_log.tag_configure("log_find_current", background="#FBC02D")
+
+        self.log_find_popup = tk.Label(
+            self.log_content_frame,
+            text="0/0",
+            bg="#1f2937",
+            fg="white",
+            padx=8,
+            pady=3,
+            relief="solid",
+            borderwidth=1,
+        )
+        self.log_find_popup.place_forget()
 
         scrollbar.config(command=self.txt_log.yview)
 
     def toggle_log_panel(self):
         if self.log_collapsed:
-            self.log_content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            self.log_content_frame.pack(side=tk.TOP, fill=tk.X)
+            self.btn_clear_log.pack(side=tk.LEFT, padx=5)
+            self.log_find_frame.pack(side=tk.RIGHT)
             self.btn_toggle_log.config(text="▼ Logs")
             self.log_collapsed = False
+            self._update_log_find_counter()
         else:
             self.log_content_frame.pack_forget()
+            self.btn_clear_log.pack_forget()
+            self.log_find_frame.pack_forget()
+            self.log_find_popup.place_forget()
             self.btn_toggle_log.config(text="▲ Logs")
             self.log_collapsed = True
 
@@ -201,6 +317,168 @@ class SimPyVisualizer(tk.Tk):
         self.txt_log.config(state="normal")
         self.txt_log.delete("1.0", tk.END)
         self.txt_log.config(state="disabled")
+        self.log_search_matches = []
+        self.log_search_index = -1
+        self._update_log_find_counter()
+
+    def _start_log_resize(self, event):
+        self.log_resize_start_y = event.y_root
+        self.log_resize_start_height = max(self.log_content_min_height, self.log_content_frame.winfo_height())
+
+    def _do_log_resize(self, event):
+        if self.log_resize_start_y is None:
+            return
+
+        delta_y = self.log_resize_start_y - event.y_root
+        new_height_px = self.log_resize_start_height + delta_y
+        new_height_px = max(self.log_content_min_height, min(self.log_content_max_height, new_height_px))
+
+        self.log_content_frame.configure(height=int(new_height_px))
+        self.bottom_panel.update_idletasks()
+
+    def _stop_log_resize(self, _event=None):
+        self.log_resize_start_y = None
+        self.log_resize_start_height = 0
+
+    def _update_log_find_counter(self):
+        query = self.log_search_var.get().strip()
+        if not query or self.log_collapsed:
+            self.log_find_popup.place_forget()
+            return
+
+        total = len(self.log_search_matches)
+        if total == 0 or self.log_search_index < 0:
+            self.log_find_popup.config(text="0/0")
+            self.log_find_popup.place(relx=1.0, x=-26, rely=1.0, y=-8, anchor="se")
+            return
+        self.log_find_popup.config(text=f"{self.log_search_index + 1}/{total}")
+        self.log_find_popup.place(relx=1.0, x=-26, rely=1.0, y=-8, anchor="se")
+
+    def _on_log_find_changed(self, _event=None):
+        self._refresh_log_search_highlights(reset_index=True)
+
+    def _refresh_log_search_highlights(self, reset_index=False):
+        query = self.log_search_var.get().strip()
+
+        self.txt_log.config(state="normal")
+        self.txt_log.tag_remove("log_find_match", "1.0", tk.END)
+        self.txt_log.tag_remove("log_find_current", "1.0", tk.END)
+
+        self.log_search_matches = []
+
+        if not query:
+            self.log_search_index = -1
+            self._update_log_find_counter()
+            self.txt_log.config(state="disabled")
+            return
+
+        start = "1.0"
+        query_len = len(query)
+        while True:
+            pos = self.txt_log.search(query, start, stopindex=tk.END, nocase=True)
+            if not pos:
+                break
+            end_pos = f"{pos}+{query_len}c"
+            self.txt_log.tag_add("log_find_match", pos, end_pos)
+            self.log_search_matches.append((pos, end_pos))
+            start = end_pos
+
+        if not self.log_search_matches:
+            self.log_search_index = -1
+            self._update_log_find_counter()
+            self.txt_log.config(state="disabled")
+            return
+
+        if reset_index or self.log_search_index < 0 or self.log_search_index >= len(self.log_search_matches):
+            self.log_search_index = 0
+
+        self._highlight_current_log_match()
+        self.txt_log.config(state="disabled")
+
+    def _highlight_current_log_match(self):
+        self.txt_log.tag_remove("log_find_current", "1.0", tk.END)
+
+        if not self.log_search_matches or self.log_search_index < 0:
+            self._update_log_find_counter()
+            return
+
+        start, end = self.log_search_matches[self.log_search_index]
+        self.txt_log.tag_add("log_find_current", start, end)
+        self.txt_log.see(start)
+        self._update_log_find_counter()
+
+    def find_next_log(self, _event=None):
+        self._refresh_log_search_highlights(reset_index=False)
+        if not self.log_search_matches:
+            return
+
+        self.log_search_index = (self.log_search_index + 1) % len(self.log_search_matches)
+        self.txt_log.config(state="normal")
+        self._highlight_current_log_match()
+        self.txt_log.config(state="disabled")
+
+    def find_prev_log(self, _event=None):
+        self._refresh_log_search_highlights(reset_index=False)
+        if not self.log_search_matches:
+            return
+
+        self.log_search_index = (self.log_search_index - 1) % len(self.log_search_matches)
+        self.txt_log.config(state="normal")
+        self._highlight_current_log_match()
+        self.txt_log.config(state="disabled")
+
+    def _format_json_log(self, payload):
+        if not isinstance(payload, dict):
+            return str(payload)
+
+        kind = payload.get("kind")
+
+        if kind == "RESOURCE":
+            timestamp = float(payload.get("time", 0.0))
+            process_name = payload.get("process", "?")
+            action = payload.get("action", "?")
+            origin = payload.get("from", "?")
+            destination = payload.get("to", "?")
+            detail = payload.get("detail")
+
+            if action == "release":
+                base = f"[{timestamp:.2f}] [RESOURCE] {process_name} released '{origin}' -> {destination}"
+            else:
+                base = f"[{timestamp:.2f}] [RESOURCE] {process_name} {action} {origin} -> {destination}"
+
+            if detail is not None:
+                return f"{base} | {json.dumps(detail, ensure_ascii=False, sort_keys=True)}"
+            return base
+
+        if kind == "STEP":
+            timestamp = float(payload.get("time", 0.0))
+            step = payload.get("step", "?")
+            phase = payload.get("phase", "?")
+            detail = payload.get("detail") or {}
+
+            if phase == "before":
+                event = detail.get("event", "?")
+                extras = []
+                if "resource" in detail:
+                    extras.append(f"resource={detail['resource']}")
+                if "process" in detail:
+                    extras.append(f"process={detail['process']}")
+                if "delay" in detail:
+                    extras.append(f"delay={detail['delay']}")
+                if "triggering" in detail:
+                    extras.append(f"triggering={','.join(detail['triggering'])}")
+                suffix = f" | {' | '.join(extras)}" if extras else ""
+                return f"[{timestamp:.2f}] [STEP {step}] before event={event}{suffix}"
+
+            if phase == "after":
+                active_process = detail.get("active_process", "-")
+                return f"[{timestamp:.2f}] [STEP {step}] after running={active_process}"
+
+        if kind == "STATUS":
+            event = payload.get("event", "UNKNOWN")
+            return f"[STATUS] {event}"
+
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     def log_message(self, messages):
         """Receives a list of log strings and displays them."""
@@ -209,7 +487,16 @@ class SimPyVisualizer(tk.Tk):
 
         self.txt_log.config(state="normal")
         for msg in messages:
-            self.txt_log.insert(tk.END, msg + "\n")
+            line = msg
+            if isinstance(msg, str):
+                stripped = msg.strip()
+                if stripped.startswith("{") and stripped.endswith("}"):
+                    try:
+                        payload = json.loads(stripped)
+                        line = self._format_json_log(payload)
+                    except json.JSONDecodeError:
+                        line = msg
+            self.txt_log.insert(tk.END, str(line) + "\n")
 
         total_lines = int(self.txt_log.index("end-1c").split(".")[0])
         if total_lines > self.max_log_lines:
@@ -218,6 +505,8 @@ class SimPyVisualizer(tk.Tk):
 
         self.txt_log.see(tk.END)
         self.txt_log.config(state="disabled")
+        if self.log_search_var.get().strip():
+            self._refresh_log_search_highlights(reset_index=False)
 
     def _setup_canvas(self):
         self.canvas_frame = tk.Frame(self)
@@ -235,16 +524,20 @@ class SimPyVisualizer(tk.Tk):
         )
         self.btn_center.place(relx=1.0, rely=1.0, anchor="se", x=-20, y=-20)
 
-        self.canvas.bind("<ButtonPress-1>", self.on_canvas_click)
-        self.canvas.bind("<B1-Motion>", self.do_pan)
-        self.canvas.bind("<ButtonRelease-1>", self.stop_pan)
+        self.block_context_menu = tk.Menu(self, tearoff=0)
+        self.block_context_menu.add_command(label="Return to Auto Layout", command=self.restore_auto_layout_for_selected)
+
+        self.canvas.bind("<ButtonPress-1>", self.on_left_press)
+        self.canvas.bind("<B1-Motion>", self.on_left_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_left_release)
+        self.canvas.bind("<ButtonPress-3>", self.on_right_press)
+        self.canvas.bind("<B3-Motion>", self.on_right_drag)
+        self.canvas.bind("<ButtonRelease-3>", self.on_right_release)
         self.canvas.bind("<MouseWheel>", self.do_zoom)
         self.canvas.bind("<Button-4>", self.do_zoom)
         self.canvas.bind("<Button-5>", self.do_zoom)
 
-    def on_canvas_click(self, event):
-        cx = self.canvas.canvasx(event.x)
-        cy = self.canvas.canvasy(event.y)
+    def _toggle_expand_at_point(self, cx, cy):
         clicked_items = self.canvas.find_overlapping(cx, cy, cx + 1, cy + 1)
 
         for item in clicked_items:
@@ -265,9 +558,113 @@ class SimPyVisualizer(tk.Tk):
                             self.draw_scene()
                     except (ValueError, IndexError):
                         pass
-                    return
+                    return True
+        return False
 
+    def _resource_at_canvas_point(self, cx, cy):
+        for resource in reversed(self.resource_draw_order):
+            bounds = self.resource_block_bounds.get(resource)
+            if not bounds:
+                continue
+            x1, y1, x2, y2 = bounds
+            if x1 <= cx <= x2 and y1 <= cy <= y2:
+                return resource
+        return None
+
+    def on_left_press(self, event):
+        cx = self.canvas.canvasx(event.x)
+        cy = self.canvas.canvasy(event.y)
+        if self._toggle_expand_at_point(cx, cy):
+            return
+
+        resource = self._resource_at_canvas_point(cx, cy)
+        if resource is None:
+            self.dragged_resource = None
+            return
+
+        current_world = self.resource_world_positions.get(resource)
+        if current_world is None:
+            return
+
+        self.dragged_resource = resource
+        self.drag_start_canvas_x = event.x
+        self.drag_start_canvas_y = event.y
+        self.drag_start_world_x, self.drag_start_world_y = current_world
+
+    def on_left_drag(self, event):
+        if self.dragged_resource is None:
+            return
+
+        dx = event.x - self.drag_start_canvas_x
+        dy = event.y - self.drag_start_canvas_y
+
+        if abs(dx) < 1 and abs(dy) < 1:
+            return
+
+        scale = self.scale if self.scale != 0 else 1.0
+        new_world_x = self.drag_start_world_x + (dx / scale)
+        new_world_y = self.drag_start_world_y + (dy / scale)
+        self.manual_block_positions[self.dragged_resource] = (new_world_x, new_world_y)
+        self.draw_scene()
+
+    def on_left_release(self, _event):
+        if self.dragged_resource is not None:
+            self._save_manual_layout_cache()
+        self.dragged_resource = None
+
+    def on_right_press(self, event):
+        cx = self.canvas.canvasx(event.x)
+        cy = self.canvas.canvasy(event.y)
+        resource = self._resource_at_canvas_point(cx, cy)
+        self.right_press_resource = resource
+        self.right_press_canvas_x = cx
+        self.right_press_canvas_y = cy
+        self.right_press_root_x = event.x_root
+        self.right_press_root_y = event.y_root
+        self.right_press_moved = False
         self.start_pan(event)
+        self.pan_active = True
+
+    def on_right_drag(self, event):
+        cx = self.canvas.canvasx(event.x)
+        cy = self.canvas.canvasy(event.y)
+        if abs(cx - self.right_press_canvas_x) > 3 or abs(cy - self.right_press_canvas_y) > 3:
+            self.right_press_moved = True
+
+        if not self.pan_active:
+            return
+        self.do_pan(event)
+
+    def on_right_release(self, event):
+        released_resource = self._resource_at_canvas_point(self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+        if self.right_press_resource is not None and not self.right_press_moved and released_resource is self.right_press_resource:
+            self.context_menu_resource = released_resource
+            try:
+                self.block_context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.block_context_menu.grab_release()
+
+        self.right_press_resource = None
+        self.right_press_moved = False
+
+        if self.pan_active:
+            self.stop_pan(event)
+        self.pan_active = False
+
+    def restore_auto_layout_for_selected(self):
+        resource = self.context_menu_resource
+        self.context_menu_resource = None
+        if resource is None:
+            return
+        try:
+            del self.manual_block_positions[resource]
+        except KeyError:
+            return
+        name = getattr(resource, "visual_name", None)
+        if name and name in self.manual_layout_by_name:
+            del self.manual_layout_by_name[name]
+        self._save_manual_layout_cache()
+        self.draw_scene()
 
     def start_pan(self, event):
         self.pan_start_x = event.x
@@ -286,6 +683,9 @@ class SimPyVisualizer(tk.Tk):
         self.canvas.move("all", dx, dy)
         self.offset_x += dx
         self.offset_y += dy
+        for resource, bounds in list(self.resource_block_bounds.items()):
+            x1, y1, x2, y2 = bounds
+            self.resource_block_bounds[resource] = (x1 + dx, y1 + dy, x2 + dx, y2 + dy)
         self.pan_start_x = event.x
         self.pan_start_y = event.y
 
@@ -308,6 +708,11 @@ class SimPyVisualizer(tk.Tk):
         self.draw_scene()
 
     def center_view(self):
+        if pending_transfers:
+            pending_transfers.clear()
+        self.active_animations = []
+        gc.collect()
+
         self.canvas.delete("all")
         self.scale = 1.0
         self.draw_scene(initial=True)
@@ -355,27 +760,46 @@ class SimPyVisualizer(tk.Tk):
             self.offset_x = dx
             self.offset_y = dy
 
-        if pending_transfers:
-            pending_transfers.clear()
+            self.obj_coords_cache = weakref.WeakKeyDictionary()
 
-        self.active_animations = []
-        self.obj_coords_cache = {}
-
-    def start_animations(self, transfers, duration_ms):
+    def start_animations(self, transfers, duration_ms, on_complete=None):
         """Starts a smooth animation of moving balls between resources."""
         target_step_time = 33
 
-        if duration_ms < target_step_time:
-            step_time = max(1, duration_ms)
+        if not transfers:
+            if on_complete:
+                on_complete()
+            return
+
+        # Ensure resources created in the current tick already have cached coordinates
+        resources_to_check = set()
+        for transfer in transfers:
+            resources_to_check.add(transfer["from"])
+            resources_to_check.add(transfer["to"])
+
+        missing_coords = [resource for resource in resources_to_check if self.obj_coords_cache.get(resource, (0, 0)) == (0, 0)]
+        if missing_coords:
+            self.draw_scene()
+            self.update_idletasks()
+
+        effective_duration_ms = max(1, int(duration_ms))
+
+        if effective_duration_ms < target_step_time:
+            step_time = max(1, effective_duration_ms)
             frames = 1
         else:
             step_time = target_step_time
-            frames = int(duration_ms / step_time)
+            frames = max(2, int(effective_duration_ms / step_time))
 
-        animated_objects = []
+        grouped_transfers = {}
         for transfer in transfers:
             origin = transfer["from"]
             destination = transfer["to"]
+            key = (origin, destination)
+            grouped_transfers[key] = grouped_transfers.get(key, 0) + 1
+
+        animated_objects = []
+        for (origin, destination), count in grouped_transfers.items():
 
             p1 = self.obj_coords_cache.get(origin, (0, 0))
             p2 = self.obj_coords_cache.get(destination, (0, 0))
@@ -383,32 +807,69 @@ class SimPyVisualizer(tk.Tk):
                 continue
 
             cx, cy = p1
-            radius = 5 * self.scale
-            ball = self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, fill="#E74C3C", outline="black", width=1)
-            animated_objects.append({"id": ball, "x1": p1[0], "y1": p1[1], "x2": p2[0], "y2": p2[1]})
+            size_factor = min(2.5, 1.0 + (0.35 * (count - 1)))
+            radius = 5 * self.scale * size_factor
+            ball = self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, fill="#27AE60", outline="black", width=1)
+
+            text_id = None
+            if count > 1:
+                text_id = self.canvas.create_text(
+                    cx,
+                    cy,
+                    text=str(count),
+                    fill="white",
+                    font=("Segoe UI", max(8, int(9 * self.scale)), "bold"),
+                )
+
+            animated_objects.append(
+                {
+                    "id": ball,
+                    "text_id": text_id,
+                    "count": count,
+                    "radius": radius,
+                    "x1": p1[0],
+                    "y1": p1[1],
+                    "x2": p2[0],
+                    "y2": p2[1],
+                }
+            )
 
         if animated_objects:
-            self.animate_frame(animated_objects, frames, 0, step_time)
+            self.animate_frame(animated_objects, frames, 0, step_time, on_complete=on_complete)
+        elif on_complete:
+            on_complete()
 
-    def animate_frame(self, animated_objects, total_frames, current_frame, step_time):
+    def animate_frame(self, animated_objects, total_frames, current_frame, step_time, on_complete=None):
         if current_frame >= total_frames:
             for obj in animated_objects:
                 self.canvas.delete(obj["id"])
+                if obj.get("text_id") is not None:
+                    self.canvas.delete(obj["text_id"])
+            self.update_idletasks()
+            if on_complete:
+                on_complete()
             return
 
         progress = (current_frame + 1) / total_frames
-        radius = 5 * self.scale
 
         for obj in animated_objects:
             current_x = obj["x1"] + (obj["x2"] - obj["x1"]) * progress
             current_y = obj["y1"] + (obj["y2"] - obj["y1"]) * progress
+            radius = obj["radius"]
             self.canvas.coords(obj["id"], current_x - radius, current_y - radius, current_x + radius, current_y + radius)
+            if obj.get("text_id") is not None:
+                self.canvas.coords(obj["text_id"], current_x, current_y)
 
-        self.after(step_time, self.animate_frame, animated_objects, total_frames, current_frame + 1, step_time)
+        self.after(step_time, self.animate_frame, animated_objects, total_frames, current_frame + 1, step_time, on_complete)
 
     def draw_scene(self, initial=False):
         if not initial:
             self.canvas.delete("all")
+
+        self.obj_coords_cache = weakref.WeakKeyDictionary()
+        self.resource_draw_order = []
+        self.resource_block_bounds = weakref.WeakKeyDictionary()
+        self.resource_world_positions = weakref.WeakKeyDictionary()
 
         previously_active_ids = set(self.active_list_widgets.keys())
         currently_active_ids = set()
@@ -422,6 +883,8 @@ class SimPyVisualizer(tk.Tk):
         start_y = (50 * self.scale) + self.offset_y
 
         margin = 20 * self.scale
+        margin_world = 20
+        gc.collect()
         resource_list = list(tracked_resources)
         resource_list.sort(key=lambda resource: getattr(resource, "visual_name", str(id(resource))))
 
@@ -429,35 +892,61 @@ class SimPyVisualizer(tk.Tk):
         if total == 0:
             return
 
+        auto_resources = [resource for resource in resource_list if resource not in self.manual_block_positions]
+        manual_resources = [resource for resource in resource_list if resource in self.manual_block_positions]
+
+        for resource in auto_resources:
+            name = getattr(resource, "visual_name", None)
+            if not name:
+                continue
+            cached_pos = self.manual_layout_by_name.get(name)
+            if cached_pos is None:
+                continue
+            self.manual_block_positions[resource] = (float(cached_pos[0]), float(cached_pos[1]))
+
+        auto_resources = [resource for resource in resource_list if resource not in self.manual_block_positions]
+        manual_resources = [resource for resource in resource_list if resource in self.manual_block_positions]
+
         col_y_offsets = {}
-        if total <= 36:
+        if len(auto_resources) <= 36:
             mode = "SQUARE"
-            grid_dim = math.ceil(math.sqrt(total)) or 1
+            grid_dim = math.ceil(math.sqrt(max(1, len(auto_resources))))
         else:
             mode = "RECT"
             fixed_rows = 6
 
-        for i, resource in enumerate(resource_list):
+        for i, resource in enumerate(auto_resources):
             if mode == "SQUARE":
                 col_logical = i % grid_dim
             else:
                 col_logical = i // fixed_rows
 
-            base_h_scaled = 100 * self.scale
-            current_height = base_h_scaled
+            base_h_world = 100
+            current_height_world = base_h_world
             if getattr(resource, "is_expanded", False):
-                current_height = (base_h_scaled * 2) + margin
+                current_height_world = 220
 
-            col_width = (300 * self.scale) + margin
-            x = start_x + (col_logical * col_width)
+            col_width_world = 320
+            x_world = 50 + (col_logical * col_width_world)
 
             if col_logical not in col_y_offsets:
-                col_y_offsets[col_logical] = start_y
+                col_y_offsets[col_logical] = 50
 
-            y = col_y_offsets[col_logical]
+            y_world = col_y_offsets[col_logical]
 
-            self._draw_block_for_resource(resource, x, y, i, resource_list, currently_active_ids)
-            col_y_offsets[col_logical] += current_height + margin
+            x = (x_world * self.scale) + self.offset_x
+            y = (y_world * self.scale) + self.offset_y
+
+            self.resource_world_positions[resource] = (x_world, y_world)
+            self._draw_block_for_resource(resource, x, y, i, resource_list, currently_active_ids, is_manual=False)
+            col_y_offsets[col_logical] += current_height_world + margin_world
+
+        for i, resource in enumerate(manual_resources):
+            x_world, y_world = self.manual_block_positions.get(resource, (50.0, 50.0))
+            x = (x_world * self.scale) + self.offset_x
+            y = (y_world * self.scale) + self.offset_y
+            self.resource_world_positions[resource] = (x_world, y_world)
+            self._draw_block_for_resource(resource, x, y, i, resource_list, currently_active_ids, is_manual=True)
 
         for resource_id in previously_active_ids:
             if resource_id not in currently_active_ids:
@@ -466,7 +955,7 @@ class SimPyVisualizer(tk.Tk):
                     widget.destroy()
                 del self.active_list_widgets[resource_id]
 
-    def _draw_block_for_resource(self, resource, x, y, index, current_list, currently_active_ids):
+    def _draw_block_for_resource(self, resource, x, y, index, current_list, currently_active_ids, is_manual=False):
         base_h = 100 * self.scale
         current_h = base_h
         expanded = getattr(resource, "is_expanded", False)
@@ -485,6 +974,7 @@ class SimPyVisualizer(tk.Tk):
         capacity = resource.capacity
         color = "#ddd"
         kind = "GENERIC"
+        visual_type = getattr(resource, "visual_type", None)
         put_q = 0
         get_q = 0
         has_dual_queue = False
@@ -492,28 +982,43 @@ class SimPyVisualizer(tk.Tk):
 
         if isinstance(resource, tk.Variable):
             pass
+        elif visual_type == "PREEMPTIVE_RESOURCE":
+            color = "#85C1E9"
+            kind = "PREEMPTIVE_RESOURCE"
+            occupied = resource.count
+            get_q = len(resource.queue)
+        elif visual_type == "PRIORITY_RESOURCE":
+            color = "#A9CCE3"
+            kind = "PRIORITY_RESOURCE"
+            occupied = resource.count
+            get_q = len(resource.queue)
         elif resource.__class__.__name__.endswith("Resource"):
             color = "#AED6F1"
-            kind = "RESOURCE"
+            kind = visual_type or "RESOURCE"
             occupied = resource.count
             get_q = len(resource.queue)
         elif resource.__class__.__name__.endswith("Container"):
             color = "#F9E79F"
-            kind = "CONTAINER"
+            kind = visual_type or "CONTAINER"
             occupied = resource.level
             put_q = len(resource.put_queue)
             get_q = len(resource.get_queue)
             has_dual_queue = True
         elif resource.__class__.__name__.endswith("Store"):
             color = "#D2B4DE"
-            kind = "STORE"
+            kind = visual_type or "STORE"
             occupied = len(resource.items)
             put_q = len(resource.put_queue)
             get_q = len(resource.get_queue)
             has_dual_queue = True
             items = resource.items
 
-        self.canvas.create_rectangle(x, y, x + w, y + h, fill=color, outline="black", width=2)
+        outline_color = "black"
+        outline_width = 2
+        dash_pattern = None if is_manual else (6, 3)
+        self.canvas.create_rectangle(x, y, x + w, y + h, fill=color, outline=outline_color, width=outline_width, dash=dash_pattern)
+        self.resource_block_bounds[resource] = (x, y, x + w, y + h)
+        self.resource_draw_order.append(resource)
 
         if resource.__class__.__name__.endswith("Store"):
             btn_size = 20 * self.scale

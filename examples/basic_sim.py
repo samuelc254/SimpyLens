@@ -3,9 +3,6 @@ import os
 import sys
 
 import simpy
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
-
 from simpy_visualizer import SimPyVisualizer
 
 
