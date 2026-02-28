@@ -240,7 +240,7 @@ def register_interaction(env, resource_instance, action, detail=None):
             "to": "<IDLE>",
         }
         step_logs.append(_format_payload(payload, detail))
-        process_locations.pop(process, None)
+        process_locations[process] = weakref.ref(resource_instance)
         return
 
     payload = {
@@ -530,6 +530,7 @@ class TrackedEnvironment(simpy.Environment):
         self._step_count += 1
 
         details = {}
+        triggering_processes = []
         event_queue = getattr(self, "_queue", [])
 
         if event_queue:
@@ -565,6 +566,7 @@ class TrackedEnvironment(simpy.Environment):
                                 waiting_processes.append(process_name)
 
                     if waiting_processes:
+                        triggering_processes = list(waiting_processes)
                         details["triggering"] = waiting_processes
             except Exception as exc:
                 details["inspect_error"] = str(exc)
@@ -585,7 +587,24 @@ class TrackedEnvironment(simpy.Environment):
 
         super().step()
 
+        active_process_name = None
         if self.active_process:
+            active_process_name = self.active_process.name
+        elif triggering_processes:
+            active_process_name = ",".join(triggering_processes)
+
+        before_expected_process = None
+        if triggering_processes:
+            before_expected_process = ",".join(triggering_processes)
+        elif details.get("process"):
+            before_expected_process = str(details.get("process"))
+
+        effective_after_process = active_process_name or "-"
+        effective_before_process = before_expected_process or "-"
+
+        should_log_after = effective_after_process != effective_before_process
+
+        if should_log_after:
             step_logs.append(
                 _format_payload(
                     {
@@ -594,7 +613,7 @@ class TrackedEnvironment(simpy.Environment):
                         "step": self._step_count,
                         "time": self.now,
                     },
-                    {"active_process": self.active_process.name},
+                    {"active_process": effective_after_process},
                 )
             )
 

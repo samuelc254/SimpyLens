@@ -76,6 +76,10 @@ def process_pot(env, pot, molding, glazing, oven, painting, clay_depot, shipping
         print("[Oven] Starting batch firing with 5 items.")
         yield env.timeout(10)
 
+        if hasattr(oven, "finished_firing"):
+            oven.finished_firing.succeed()
+            oven.finished_firing = env.event()
+
         ready_batch = []
         for _ in range(5):
             item = yield oven.get()
@@ -87,6 +91,10 @@ def process_pot(env, pot, molding, glazing, oven, painting, clay_depot, shipping
     else:
         if not hasattr(oven, "batch_ready_event"):
             oven.batch_ready_event = env.event()
+        if not hasattr(oven, "finished_firing"):
+            oven.finished_firing = env.event()
+
+        yield oven.finished_firing
         yield oven.batch_ready_event
 
     # --- STEP 4: FINAL PAINTING ---

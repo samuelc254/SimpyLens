@@ -29,6 +29,44 @@ class SimulationController:
         self.on_pause_cb = on_pause_cb if on_pause_cb else lambda: None
         self.log_callback = log_callback if log_callback else lambda msg: None
 
+    def _resource_visual_signature(self, resource):
+        kind = resource.__class__.__name__
+        visual_type = getattr(resource, "visual_type", kind)
+
+        if kind.endswith("Container"):
+            return (
+                visual_type,
+                float(getattr(resource, "level", 0.0)),
+                len(getattr(resource, "put_queue", [])),
+                len(getattr(resource, "get_queue", [])),
+            )
+
+        if kind.endswith("Store"):
+            items = getattr(resource, "items", [])
+            return (
+                visual_type,
+                tuple(str(item) for item in items),
+                len(getattr(resource, "put_queue", [])),
+                len(getattr(resource, "get_queue", [])),
+            )
+
+        if kind.endswith("Resource"):
+            return (
+                visual_type,
+                int(getattr(resource, "count", 0)),
+                len(getattr(resource, "queue", [])),
+            )
+
+        return (visual_type,)
+
+    def _capture_visual_state_signature(self):
+        signature = []
+        for resource in list(tracked_resources):
+            resource_name = getattr(resource, "visual_name", str(id(resource)))
+            signature.append((resource_name, self._resource_visual_signature(resource)))
+        signature.sort(key=lambda item: item[0])
+        return tuple(signature)
+
     def set_setup_func(self, func):
         self._setup_func = func
 
@@ -123,6 +161,8 @@ class SimulationController:
             self.on_pause_cb()
             return
 
+        before_signature = self._capture_visual_state_signature()
+
         try:
             self.env.step()
         except simpy.core.EmptySchedule:
@@ -132,18 +172,23 @@ class SimulationController:
 
         should_pause_after_cycle = self.env.now >= self.target_time
 
-        self.update_time_cb(self.env.now)
-        self.draw_callback()
-
-        if step_logs:
-            self.log_callback(list(step_logs))
-            step_logs.clear()
-
         target_delay_ms = self._compute_delay_ms()
         transfers = []
         if pending_transfers:
             transfers = list(pending_transfers)
             pending_transfers.clear()
+
+        after_signature = self._capture_visual_state_signature()
+        visual_state_changed = before_signature != after_signature
+        has_visual_change = bool(transfers) or visual_state_changed
+
+        self.update_time_cb(self.env.now)
+        if has_visual_change:
+            self.draw_callback()
+
+        if step_logs:
+            self.log_callback(list(step_logs))
+            step_logs.clear()
 
         def finish_cycle():
             elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -153,7 +198,10 @@ class SimulationController:
                 self.on_pause_cb()
                 return
 
-            wait_ms = max(1, int(target_delay_ms - elapsed_ms))
+            if has_visual_change:
+                wait_ms = max(1, int(target_delay_ms - elapsed_ms))
+            else:
+                wait_ms = 0
             self.schedule_cb(wait_ms, self.step)
 
         if transfers:

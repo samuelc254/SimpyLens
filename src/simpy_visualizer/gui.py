@@ -468,11 +468,11 @@ class SimPyVisualizer(tk.Tk):
                 if "triggering" in detail:
                     extras.append(f"triggering={','.join(detail['triggering'])}")
                 suffix = f" | {' | '.join(extras)}" if extras else ""
-                return f"[{timestamp:.2f}] [STEP {step}] before event={event}{suffix}"
+                return f"[{timestamp:.2f}] [before] [STEP {step}] event={event}{suffix}"
 
             if phase == "after":
                 active_process = detail.get("active_process", "-")
-                return f"[{timestamp:.2f}] [STEP {step}] after running={active_process}"
+                return f"[{timestamp:.2f}] [after] [STEP {step}] running={active_process}"
 
         if kind == "STATUS":
             event = payload.get("event", "UNKNOWN")
@@ -571,6 +571,61 @@ class SimPyVisualizer(tk.Tk):
                 return resource
         return None
 
+    def _compute_auto_layout_world_positions(self, auto_resources):
+        positions = {}
+        if not auto_resources:
+            return positions
+
+        col_y_offsets = {}
+        if len(auto_resources) <= 36:
+            mode = "SQUARE"
+            grid_dim = math.ceil(math.sqrt(max(1, len(auto_resources))))
+        else:
+            mode = "RECT"
+            fixed_rows = 6
+
+        for i, resource in enumerate(auto_resources):
+            if mode == "SQUARE":
+                col_logical = i % grid_dim
+            else:
+                col_logical = i // fixed_rows
+
+            base_h_world = 100
+            current_height_world = 220 if getattr(resource, "is_expanded", False) else base_h_world
+
+            col_width_world = 320
+            x_world = 50 + (col_logical * col_width_world)
+
+            if col_logical not in col_y_offsets:
+                col_y_offsets[col_logical] = 50
+
+            y_world = col_y_offsets[col_logical]
+            positions[resource] = (float(x_world), float(y_world))
+            col_y_offsets[col_logical] += current_height_world + 20
+
+        return positions
+
+    def _is_resource_aligned_to_auto_layout(self, resource, tolerance=0.5):
+        if resource is None:
+            return True
+
+        resource_list = list(tracked_resources)
+        resource_list.sort(key=lambda item: getattr(item, "visual_name", str(id(item))))
+        if resource not in resource_list:
+            return True
+
+        if resource not in self.manual_block_positions:
+            return True
+
+        auto_resources = [item for item in resource_list if item not in self.manual_block_positions or item is resource]
+        auto_positions = self._compute_auto_layout_world_positions(auto_resources)
+        expected = auto_positions.get(resource)
+        current = self.manual_block_positions.get(resource)
+        if not expected or not current:
+            return True
+
+        return abs(current[0] - expected[0]) <= tolerance and abs(current[1] - expected[1]) <= tolerance
+
     def on_left_press(self, event):
         cx = self.canvas.canvasx(event.x)
         cy = self.canvas.canvasy(event.y)
@@ -639,8 +694,12 @@ class SimPyVisualizer(tk.Tk):
         released_resource = self._resource_at_canvas_point(self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
         if self.right_press_resource is not None and not self.right_press_moved and released_resource is self.right_press_resource:
             self.context_menu_resource = released_resource
+            self.block_context_menu.delete(0, tk.END)
+            if not self._is_resource_aligned_to_auto_layout(released_resource):
+                self.block_context_menu.add_command(label="Return to Auto Layout", command=self.restore_auto_layout_for_selected)
             try:
-                self.block_context_menu.tk_popup(event.x_root, event.y_root)
+                if self.block_context_menu.index("end") is not None:
+                    self.block_context_menu.tk_popup(event.x_root, event.y_root)
             finally:
                 self.block_context_menu.grab_release()
 
