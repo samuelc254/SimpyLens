@@ -54,6 +54,7 @@ class Viewer(tk.Tk):
         self.right_press_root_y = 0
         self.right_press_moved = False
         self.manual_layout_by_name = {}
+        self.detail_windows = {}
         self.layout_config_path = self._resolve_layout_config_path()
         self._load_manual_layout_cache()
 
@@ -508,6 +509,320 @@ class Viewer(tk.Tk):
         if self.log_search_var.get().strip():
             self._refresh_log_search_highlights(reset_index=False)
 
+    def _format_queue_badge_count(self, value):
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            return str(value)
+
+        if count <= 0:
+            return "0"
+
+        if count > 99999:
+            return "99k+"
+
+        if count >= 10000:
+            rounded_k = int(round(count / 1000.0))
+            rounded_k = max(10, min(99, rounded_k))
+            return f"{rounded_k}k"
+
+        return str(count)
+
+    def _open_details_for_selected(self):
+        resource = self.context_menu_resource
+        self.context_menu_resource = None
+        if resource is None:
+            return
+        self._open_details_window(resource)
+
+    def _safe_item_text(self, item):
+        try:
+            if isinstance(item, (dict, list, tuple)):
+                return json.dumps(item, ensure_ascii=False, sort_keys=True)
+            return str(item)
+        except Exception:
+            return repr(item)
+
+    def _collect_resource_details(self, resource):
+        class_name = resource.__class__.__name__
+        visual_type = getattr(resource, "visual_type", class_name)
+        name = getattr(resource, "visual_name", class_name)
+        capacity = getattr(resource, "capacity", "N/A")
+
+        occupied = "N/A"
+        put_queue_count = 0
+        get_queue_count = 0
+        internal_queue_count = None
+        store_items = None
+
+        if class_name.endswith("Container"):
+            occupied = getattr(resource, "level", 0)
+            put_queue_count = len(getattr(resource, "put_queue", []))
+            get_queue_count = len(getattr(resource, "get_queue", []))
+        elif class_name.endswith("Store"):
+            items = list(getattr(resource, "items", []))
+            occupied = len(items)
+            put_queue_count = len(getattr(resource, "put_queue", []))
+            get_queue_count = len(getattr(resource, "get_queue", []))
+            store_items = [f"[{idx}] {self._safe_item_text(item)}" for idx, item in enumerate(items)]
+        elif class_name.endswith("Resource"):
+            occupied = int(getattr(resource, "count", 0))
+            internal_queue_count = len(getattr(resource, "queue", []))
+            get_queue_count = int(internal_queue_count)
+
+        sim_time = 0.0
+        if hasattr(self, "sim_ctrl") and self.sim_ctrl and self.sim_ctrl.env is not None:
+            sim_time = float(self.sim_ctrl.env.now)
+
+        return {
+            "name": str(name),
+            "visual_type": str(visual_type),
+            "class_name": str(class_name),
+            "capacity": str(capacity),
+            "occupied": str(occupied),
+            "put_queue_count": str(put_queue_count),
+            "get_queue_count": str(get_queue_count),
+            "internal_queue_count": "N/A" if internal_queue_count is None else str(internal_queue_count),
+            "store_items": store_items,
+            "sim_time": f"{sim_time:.2f}",
+        }
+
+    def _open_details_window(self, resource):
+        window_id = id(resource)
+        existing = self.detail_windows.get(window_id)
+        if existing and existing["window"].winfo_exists():
+            existing["window"].deiconify()
+            existing["window"].lift()
+            existing["window"].focus_force()
+            return
+
+        details_win = tk.Toplevel(self)
+        details_win.title("Resource Details")
+        details_win.geometry("620x460")
+        details_win.minsize(520, 360)
+
+        root = ttk.Frame(details_win, padding=10)
+        root.pack(fill=tk.BOTH, expand=True)
+
+        fields_frame = ttk.Frame(root)
+        fields_frame.pack(fill=tk.X)
+
+        row_defs = [
+            ("Resource Name", "name"),
+            ("Visual Type", "visual_type"),
+            ("Class", "class_name"),
+            ("Simulation Time", "sim_time"),
+            ("Capacity", "capacity"),
+            ("Occupied", "occupied"),
+            ("Put Queue (full)", "put_queue_count"),
+            ("Get Queue (full)", "get_queue_count"),
+            ("Internal Queue", "internal_queue_count"),
+        ]
+
+        value_labels = {}
+        for row, (label_text, key) in enumerate(row_defs):
+            ttk.Label(fields_frame, text=f"{label_text}:", width=18, anchor="w").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=1)
+            value = ttk.Label(fields_frame, text="-", anchor="w")
+            value.grid(row=row, column=1, sticky="w", pady=1)
+            value_labels[key] = value
+
+        ttk.Separator(root, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(10, 8))
+        ttk.Label(root, text="Store Items (detailed view):").pack(anchor="w")
+
+        find_frame = ttk.Frame(root)
+        find_frame.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(find_frame, text="Find:").pack(side=tk.LEFT, padx=(0, 4))
+        details_find_var = tk.StringVar(value="")
+        ent_details_find = ttk.Entry(find_frame, textvariable=details_find_var, width=22)
+        ent_details_find.pack(side=tk.LEFT)
+        ent_details_find.bind("<KeyRelease>", lambda _event: self._refresh_details_search(window_id, reset_index=True))
+        ent_details_find.bind("<Return>", lambda _event: self._details_find_next(window_id))
+        ttk.Button(find_frame, text="◀", width=3, command=lambda: self._details_find_prev(window_id)).pack(side=tk.LEFT, padx=(4, 2))
+        ttk.Button(find_frame, text="▶", width=3, command=lambda: self._details_find_next(window_id)).pack(side=tk.LEFT)
+        find_counter = ttk.Label(find_frame, text="0/0", width=6, anchor="e")
+        find_counter.pack(side=tk.RIGHT)
+
+        items_frame = ttk.Frame(root)
+        items_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        items_scroll = ttk.Scrollbar(items_frame, orient=tk.VERTICAL)
+        items_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        items_text = tk.Text(
+            items_frame,
+            font=("Consolas", 9),
+            wrap=tk.NONE,
+            yscrollcommand=items_scroll.set,
+            state="disabled",
+            bg="#fbfbfb",
+        )
+        items_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        items_text.tag_configure("details_find_match", background="#FFF59D")
+        items_text.tag_configure("details_find_current", background="#FBC02D")
+        items_scroll.config(command=items_text.yview)
+
+        def on_close():
+            self.detail_windows.pop(window_id, None)
+            details_win.destroy()
+
+        details_win.protocol("WM_DELETE_WINDOW", on_close)
+
+        self.detail_windows[window_id] = {
+            "window": details_win,
+            "resource_ref": weakref.ref(resource),
+            "value_labels": value_labels,
+            "items_text": items_text,
+            "last_items_blob": None,
+            "find_var": details_find_var,
+            "find_matches": [],
+            "find_index": -1,
+            "find_counter_label": find_counter,
+        }
+        self._refresh_details_window(window_id)
+
+    def _details_update_find_counter(self, window_id):
+        entry = self.detail_windows.get(window_id)
+        if not entry:
+            return
+
+        query = entry["find_var"].get().strip()
+        total = len(entry["find_matches"])
+        index = entry["find_index"]
+
+        if not query or total == 0 or index < 0:
+            entry["find_counter_label"].config(text="0/0")
+            return
+
+        entry["find_counter_label"].config(text=f"{index + 1}/{total}")
+
+    def _highlight_current_details_match(self, window_id):
+        entry = self.detail_windows.get(window_id)
+        if not entry:
+            return
+
+        items_text = entry["items_text"]
+        items_text.tag_remove("details_find_current", "1.0", tk.END)
+
+        if not entry["find_matches"] or entry["find_index"] < 0:
+            self._details_update_find_counter(window_id)
+            return
+
+        start, end = entry["find_matches"][entry["find_index"]]
+        items_text.tag_add("details_find_current", start, end)
+        items_text.see(start)
+        self._details_update_find_counter(window_id)
+
+    def _refresh_details_search(self, window_id, reset_index=False):
+        entry = self.detail_windows.get(window_id)
+        if not entry:
+            return
+
+        items_text = entry["items_text"]
+        query = entry["find_var"].get().strip()
+
+        items_text.config(state="normal")
+        items_text.tag_remove("details_find_match", "1.0", tk.END)
+        items_text.tag_remove("details_find_current", "1.0", tk.END)
+        entry["find_matches"] = []
+
+        if not query:
+            entry["find_index"] = -1
+            self._details_update_find_counter(window_id)
+            items_text.config(state="disabled")
+            return
+
+        start = "1.0"
+        query_len = len(query)
+        while True:
+            pos = items_text.search(query, start, stopindex=tk.END, nocase=True)
+            if not pos:
+                break
+            end_pos = f"{pos}+{query_len}c"
+            items_text.tag_add("details_find_match", pos, end_pos)
+            entry["find_matches"].append((pos, end_pos))
+            start = end_pos
+
+        if not entry["find_matches"]:
+            entry["find_index"] = -1
+            self._details_update_find_counter(window_id)
+            items_text.config(state="disabled")
+            return
+
+        if reset_index or entry["find_index"] < 0 or entry["find_index"] >= len(entry["find_matches"]):
+            entry["find_index"] = 0
+
+        self._highlight_current_details_match(window_id)
+        items_text.config(state="disabled")
+
+    def _details_find_next(self, window_id):
+        self._refresh_details_search(window_id, reset_index=False)
+        entry = self.detail_windows.get(window_id)
+        if not entry or not entry["find_matches"]:
+            return
+
+        entry["find_index"] = (entry["find_index"] + 1) % len(entry["find_matches"])
+        entry["items_text"].config(state="normal")
+        self._highlight_current_details_match(window_id)
+        entry["items_text"].config(state="disabled")
+
+    def _details_find_prev(self, window_id):
+        self._refresh_details_search(window_id, reset_index=False)
+        entry = self.detail_windows.get(window_id)
+        if not entry or not entry["find_matches"]:
+            return
+
+        entry["find_index"] = (entry["find_index"] - 1) % len(entry["find_matches"])
+        entry["items_text"].config(state="normal")
+        self._highlight_current_details_match(window_id)
+        entry["items_text"].config(state="disabled")
+
+    def _refresh_details_window(self, window_id):
+        entry = self.detail_windows.get(window_id)
+        if not entry:
+            return
+
+        details_win = entry["window"]
+        if not details_win.winfo_exists():
+            self.detail_windows.pop(window_id, None)
+            return
+
+        resource = entry["resource_ref"]()
+        if resource is None:
+            for label in entry["value_labels"].values():
+                label.config(text="Unavailable")
+            items_blob = "Resource no longer available."
+        else:
+            details = self._collect_resource_details(resource)
+            entry["value_labels"]["name"].config(text=details["name"])
+            entry["value_labels"]["visual_type"].config(text=details["visual_type"])
+            entry["value_labels"]["class_name"].config(text=details["class_name"])
+            entry["value_labels"]["sim_time"].config(text=details["sim_time"])
+            entry["value_labels"]["capacity"].config(text=details["capacity"])
+            entry["value_labels"]["occupied"].config(text=details["occupied"])
+            entry["value_labels"]["put_queue_count"].config(text=details["put_queue_count"])
+            entry["value_labels"]["get_queue_count"].config(text=details["get_queue_count"])
+            entry["value_labels"]["internal_queue_count"].config(text=details["internal_queue_count"])
+
+            if details["store_items"] is None:
+                items_blob = "Detailed items are available for Store resources only."
+            elif not details["store_items"]:
+                items_blob = "(Store is empty)"
+            else:
+                items_blob = "\n".join(details["store_items"])
+
+        if items_blob != entry["last_items_blob"]:
+            items_text = entry["items_text"]
+            items_text.config(state="normal")
+            items_text.delete("1.0", tk.END)
+            items_text.insert(tk.END, items_blob)
+            items_text.config(state="disabled")
+            entry["last_items_blob"] = items_blob
+            if entry["find_var"].get().strip():
+                self._refresh_details_search(window_id, reset_index=True)
+            else:
+                self._details_update_find_counter(window_id)
+
+        self.after(300, lambda: self._refresh_details_window(window_id))
+
     def _setup_canvas(self):
         self.canvas_frame = tk.Frame(self)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
@@ -591,7 +906,8 @@ class Viewer(tk.Tk):
                 col_logical = i // fixed_rows
 
             base_h_world = 100
-            current_height_world = 220 if getattr(resource, "is_expanded", False) else base_h_world
+            expanded_h_world = (base_h_world * 2) + 20
+            current_height_world = expanded_h_world if getattr(resource, "is_expanded", False) else base_h_world
 
             col_width_world = 320
             x_world = 50 + (col_logical * col_width_world)
@@ -695,7 +1011,9 @@ class Viewer(tk.Tk):
         if self.right_press_resource is not None and not self.right_press_moved and released_resource is self.right_press_resource:
             self.context_menu_resource = released_resource
             self.block_context_menu.delete(0, tk.END)
+            self.block_context_menu.add_command(label="Details", command=self._open_details_for_selected)
             if not self._is_resource_aligned_to_auto_layout(released_resource):
+                self.block_context_menu.add_separator()
                 self.block_context_menu.add_command(label="Return to Auto Layout", command=self.restore_auto_layout_for_selected)
             try:
                 if self.block_context_menu.index("end") is not None:
@@ -981,9 +1299,8 @@ class Viewer(tk.Tk):
                 col_logical = i // fixed_rows
 
             base_h_world = 100
-            current_height_world = base_h_world
-            if getattr(resource, "is_expanded", False):
-                current_height_world = 220
+            expanded_h_world = (base_h_world * 2) + 20
+            current_height_world = expanded_h_world if getattr(resource, "is_expanded", False) else base_h_world
 
             col_width_world = 320
             x_world = 50 + (col_logical * col_width_world)
@@ -1187,24 +1504,39 @@ class Viewer(tk.Tk):
 
             currently_active_ids.add(resource_id)
 
-        radius = 15 * self.scale
-        badge_font = ("Segoe UI", int(10 * self.scale), "bold")
+        badge_half_height = 12 * self.scale
+        badge_min_half_width = 20 * self.scale
+        badge_char_half_width = 3.6 * self.scale
+        badge_font = ("Segoe UI", int(9 * self.scale), "bold")
         label_font = ("Segoe UI", int(7 * self.scale))
+        is_store_resource = resource.__class__.__name__.endswith("Store")
+        right_badge_offset = 55 * self.scale if is_store_resource else 30 * self.scale
+        left_badge_offset = 95 * self.scale if is_store_resource else 70 * self.scale
+
+        def draw_queue_badge(cx, cy, count_value, fill_color, label_text):
+            count_text = self._format_queue_badge_count(count_value)
+            badge_half_width = max(badge_min_half_width, (len(count_text) * badge_char_half_width) + (7 * self.scale))
+            outline_width = 1 if self.scale < 0.95 else 2
+            self.canvas.create_rectangle(
+                cx - badge_half_width,
+                cy - badge_half_height,
+                cx + badge_half_width,
+                cy + badge_half_height,
+                fill=fill_color,
+                outline="white",
+                width=outline_width,
+            )
+            self.canvas.create_text(cx, cy, text=count_text, fill="white", font=badge_font)
+            self.canvas.create_text(cx, cy + badge_half_height + 7 * self.scale, text=label_text, font=label_font)
 
         if has_dual_queue:
             if put_q > 0:
-                cx, cy = x + w - 30 * self.scale, y + 20 * self.scale
-                self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, fill="#E67E22", outline="white", width=2)
-                self.canvas.create_text(cx, cy, text=str(put_q), fill="white", font=badge_font)
-                self.canvas.create_text(cx, cy + radius + 7 * self.scale, text="PUT", font=label_font)
+                cx, cy = x + w - right_badge_offset, y + 20 * self.scale
+                draw_queue_badge(cx, cy, put_q, "#E67E22", "PUT")
             if get_q > 0:
-                cx, cy = x + w - 70 * self.scale, y + 20 * self.scale
-                self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, fill="#C0392B", outline="white", width=2)
-                self.canvas.create_text(cx, cy, text=str(get_q), fill="white", font=badge_font)
-                self.canvas.create_text(cx, cy + radius + 7 * self.scale, text="GET", font=label_font)
+                cx, cy = x + w - left_badge_offset, y + 20 * self.scale
+                draw_queue_badge(cx, cy, get_q, "#C0392B", "GET")
         else:
             if get_q > 0:
-                cx, cy = x + w - 30 * self.scale, y + 20 * self.scale
-                self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, fill="#E67E22", outline="white", width=2)
-                self.canvas.create_text(cx, cy, text=str(get_q), fill="white", font=badge_font)
-                self.canvas.create_text(cx, cy + radius + 7 * self.scale, text="Q", font=label_font)
+                cx, cy = x + w - right_badge_offset, y + 20 * self.scale
+                draw_queue_badge(cx, cy, get_q, "#E67E22", "Q")
