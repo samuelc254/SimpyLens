@@ -1,10 +1,6 @@
-import random
-import os
-import sys
-
 import simpy
-from simpy_visualizer import SimPyVisualizer
-
+import simpylens
+import random
 
 # LOG CONFIGURATION
 VERBOSE = False
@@ -142,5 +138,7 @@ def setup(env):
 
 
 if __name__ == "__main__":
-    viz = SimPyVisualizer(setup_func=setup, title="Hospital Complex Simulation")
-    viz.mainloop()
+    import simpylens
+
+    sim_view = simpylens.Viewer(setup_func=setup)
+    sim_view.mainloop()

@@ -1,9 +1,10 @@
 import simpy
+import simpylens
 import random
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import List, Dict
 
 logging.basicConfig(level=logging.INFO, format="[%(sim_time)07.2f] %(levelname)s - %(message)s")
 
@@ -251,7 +252,5 @@ def setup(env):
 
 
 if __name__ == "__main__":
-    from simpy_visualizer import SimPyVisualizer
-
-    viz = SimPyVisualizer(setup_func=setup, title="Semiconductor Fab Complex Simulation")
-    viz.mainloop()
+    sim_view = simpylens.Viewer(setup_func=setup)
+    sim_view.mainloop()

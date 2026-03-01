@@ -10,10 +10,10 @@ import gc
 from pathlib import Path
 
 
-class SimPyVisualizer(tk.Tk):
-    def __init__(self, setup_func=None, title="SimPy Visualizer"):
+class Viewer(tk.Tk):
+    def __init__(self, setup_func=None, title="SimPyLens"):
         """
-        Initializes the SimPy Visualizer.
+        Initializes SimPyLens.
 
         :param setup_func: A function that takes a simpy.Environment as its only argument
                            and sets up the simulation (creates resources, processes, etc).
