@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simpylens"
+version = "0.1.0"
+description = "SimPyLens: zero-invasion visualization and debugging toolkit for SimPy simulations"
+authors = [
+    {name = "Samuel Oliveira Costa", email = "sam.oc2005@gmail.com"},
+]
+readme = "readme.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["simpy", "simulation", "discrete-event", "visualization", "debugging", "tkinter"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Topic :: Software Development :: Debuggers",
+]
+dependencies = [
+    "simpy>=4.0.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/samuelc254/simpylens"
+"Repository" = "https://github.com/samuelc254/simpylens"
+"Issues" = "https://github.com/samuelc254/simpylens/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
