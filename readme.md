@@ -3,7 +3,7 @@
 simpyLens is a zero-invasion visualization and debugging toolkit for simpy models.
 It helps you inspect simulation behavior visually, without rewriting your business logic.
 
-![simpyLens running](assets/basic_sim.gif)
+![simpyLens running](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/basic_sim.gif)
 
 ## What simpyLens does
 
