@@ -1,11 +1,12 @@
 import json
+import random
 import simpy
 import time
 from .monkey_patch import pending_transfers, tracked_resources, step_logs
 
 
 class SimulationController:
-    def __init__(self, draw_callback, start_animations_cb, update_time_cb, schedule_cb, speed_getter, log_callback=None, on_breakpoint_cb=None):
+    def __init__(self, draw_callback, start_animations_cb, update_time_cb, schedule_cb, speed_getter, log_callback=None, on_breakpoint_cb=None, seed=None):
         """Controller that manages the SimPy Environment and stepping logic.
 
         - draw_callback(initial=False): function to ask the GUI to redraw
@@ -17,7 +18,7 @@ class SimulationController:
         """
         self.env = None
         self.running = False
-        self._setup_func = None
+        self._model = None
 
         self.draw_callback = draw_callback
         self.start_animations_cb = start_animations_cb
@@ -26,6 +27,7 @@ class SimulationController:
         self.speed_getter = speed_getter
         self.log_callback = log_callback if log_callback else lambda msg: None
         self.on_breakpoint_cb = on_breakpoint_cb
+        self.seed = 42 if seed is None else seed
 
         self._next_breakpoint_id = 1
         self._breakpoints = []
@@ -263,12 +265,17 @@ class SimulationController:
         signature.sort(key=lambda item: item[0])
         return tuple(signature)
 
-    def set_setup_func(self, func):
-        self._setup_func = func
+    def set_model(self, func):
+        self._model = func
 
-    def reset(self, setup_func=None):
-        if setup_func is not None:
-            self._setup_func = setup_func
+    def set_seed(self, seed):
+        self.seed = 42 if seed is None else seed
+
+    def reset(self, model=None):
+        if model is not None:
+            self._model = model
+
+        random.seed(self.seed)
 
         self.running = False
         tracked_resources.clear()
@@ -276,7 +283,7 @@ class SimulationController:
         step_logs.clear()
         self.log_callback([json.dumps({"kind": "STATUS", "event": "RESET", "time": 0.0}, ensure_ascii=False, sort_keys=True)])
 
-        if not self._setup_func:
+        if not self._model:
             self.env = None
             self.update_time_cb(0.0)
             return
@@ -285,7 +292,7 @@ class SimulationController:
         self.env = simpy.Environment()
 
         try:
-            self._setup_func(self.env)
+            self._model(self.env)
         except Exception as e:
             # propagate by updating time to 0 and rethrow for GUI to handle if needed
             self.update_time_cb(0.0)
@@ -301,7 +308,7 @@ class SimulationController:
         return max(1, delay_ms)
 
     def run(self):
-        if not self._setup_func:
+        if not self._model:
             return
 
         if self.env is None:
@@ -313,7 +320,7 @@ class SimulationController:
 
     def run_single_step(self):
         if not self.env:
-            if self._setup_func:
+            if self._model:
                 self.reset()
             else:
                 return
@@ -409,10 +416,11 @@ class SimulationController:
 
 
 class Manager:
-    def __init__(self, setup_func=None, title="SimPyLens", with_ui=True):
-        self.setup_func = setup_func
+    def __init__(self, model=None, title="SimPyLens", with_ui=True, seed=42):
+        self.model = model
         self.title = title
         self.with_ui = bool(with_ui)
+        self.seed = 42 if seed is None else seed
 
         self.viewer = None
         self.sim_ctrl = None
@@ -420,7 +428,7 @@ class Manager:
         if self.with_ui:
             from .gui import Viewer
 
-            self.viewer = Viewer(setup_func=setup_func, title=title)
+            self.viewer = Viewer(model=self.model, title=title, seed=self.seed)
             self.sim_ctrl = self.viewer.sim_ctrl
         else:
             self.sim_ctrl = SimulationController(
@@ -430,10 +438,19 @@ class Manager:
                 schedule_cb=lambda ms, fn: None,
                 speed_getter=lambda: 50,
                 log_callback=lambda messages: None,
+                seed=self.seed,
             )
-            self.sim_ctrl.set_setup_func(self.setup_func)
-            if self.setup_func:
-                self.sim_ctrl.reset(self.setup_func)
+            self.sim_ctrl.set_model(self.model)
+            if self.model:
+                self.sim_ctrl.reset(self.model)
+
+    def set_seed(self, seed):
+        self.seed = 42 if seed is None else seed
+        self.sim_ctrl.set_seed(self.seed)
+
+    def set_model(self, model):
+        self.model = model
+        self.sim_ctrl.set_model(self.model)
 
     def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
         return self.sim_ctrl.add_breakpoint(
@@ -460,15 +477,15 @@ class Manager:
         return self.sim_ctrl.list_breakpoints()
 
     def run(self):
-        self.sim_ctrl.set_setup_func(self.setup_func)
+        self.sim_ctrl.set_model(self.model)
         self.sim_ctrl.run()
 
     def pause(self):
         self.sim_ctrl.pause()
 
     def step(self):
-        self.sim_ctrl.set_setup_func(self.setup_func)
+        self.sim_ctrl.set_model(self.model)
         self.sim_ctrl.run_single_step()
 
     def reset(self):
-        self.sim_ctrl.reset(self.setup_func)
+        self.sim_ctrl.reset(self.model)

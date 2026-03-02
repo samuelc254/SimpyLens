@@ -12,3 +12,10 @@
 
 - adicionar rewind step (avaliar a viabilidade)
 
+- remover alias de time para breakpoint
+
+- deixar tamanho do log salvo configuravel e adicionar opção de salvar o log em um arquivo
+
+- refatorar viewer para não ser mais publico e deixar o manager como ponto de acesso principal
+
+- adicionar coleta de métricas

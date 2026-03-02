@@ -3,7 +3,7 @@
 simpyLens is a zero-invasion visualization and debugging toolkit for simpy models.
 It helps you inspect simulation behavior visually, without rewriting your business logic.
 
-![simpyLens running](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/basic_sim.gif)
+![simpyLens running](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/basic_sim.gif?v=20260302)
 
 ## What simpyLens does
 
@@ -67,7 +67,7 @@ def setup(env):
 
 
 if __name__ == "__main__":
-    manager = simpylens.Manager(setup_func=setup, title="My Simulation")
+    manager = simpylens.Manager(model=setup, title="My Simulation")
     manager.viewer.mainloop()
 ```
 
@@ -81,7 +81,7 @@ Main exports:
 Recommended entrypoint: `Manager`
 
 ```python
-manager = simpylens.Manager(setup_func=setup, title="Demo", with_ui=True)
+manager = simpylens.Manager(model=setup, title="Demo", with_ui=True)
 manager.run()
 manager.pause()
 manager.step()
@@ -91,7 +91,7 @@ manager.reset()
 You can also instantiate `Viewer` directly if preferred:
 
 ```python
-viewer = simpylens.Viewer(setup_func=setup, title="Demo")
+viewer = simpylens.Viewer(model=setup, title="Demo")
 viewer.mainloop()
 ```
 

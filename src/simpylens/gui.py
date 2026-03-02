@@ -11,12 +11,12 @@ from pathlib import Path
 
 
 class Viewer(tk.Tk):
-    def __init__(self, setup_func=None, title="SimPyLens"):
+    def __init__(self, model=None, title="SimPyLens", seed=None):
         """
         Initializes SimPyLens.
 
-        :param setup_func: A function that takes a simpy.Environment as its only argument
-                           and sets up the simulation (creates resources, processes, etc).
+        :param model: A function that takes a simpy.Environment as its only argument
+                      and sets up the simulation (creates resources, processes, etc).
         :param title: Window title.
         """
         apply_patch()
@@ -32,7 +32,7 @@ class Viewer(tk.Tk):
         self.offset_x = 0.0
         self.offset_y = 0.0
 
-        self.current_setup_func = setup_func
+        self.current_model = model
 
         self.obj_coords_cache = weakref.WeakKeyDictionary()
         self.active_animations = []
@@ -102,14 +102,15 @@ class Viewer(tk.Tk):
             speed_getter=lambda: self.scl_speed.get(),
             log_callback=self.log_message,
             on_breakpoint_cb=self._on_breakpoint_hit,
+            seed=42 if seed is None else seed,
         )
 
         self._setup_breakpoint_panel()
         self._refresh_breakpoint_panel()
 
-        if self.current_setup_func:
+        if self.current_model:
             try:
-                self.sim_ctrl.reset(self.current_setup_func)
+                self.sim_ctrl.reset(self.current_model)
                 self.after(100, self.center_view)
             except Exception as exc:
                 messagebox.showerror("Simulation Error", f"Error in setup():\n{exc}")
@@ -126,8 +127,8 @@ class Viewer(tk.Tk):
 
     def _resolve_layout_config_path(self):
         setup_path = None
-        if self.current_setup_func and hasattr(self.current_setup_func, "__code__"):
-            setup_path = Path(self.current_setup_func.__code__.co_filename).resolve()
+        if self.current_model and hasattr(self.current_model, "__code__"):
+            setup_path = Path(self.current_model.__code__.co_filename).resolve()
 
         if setup_path is not None:
             return setup_path.parent / f".{setup_path.stem}.simpy_layout.json"
@@ -220,19 +221,19 @@ class Viewer(tk.Tk):
     def on_play_click(self):
         self.paused_breakpoint_id = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
-        self.sim_ctrl.set_setup_func(self.current_setup_func)
+        self.sim_ctrl.set_model(self.current_model)
         self.sim_ctrl.run()
 
     def on_step_click(self):
         self.paused_breakpoint_id = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
-        self.sim_ctrl.set_setup_func(self.current_setup_func)
+        self.sim_ctrl.set_model(self.current_model)
         self.sim_ctrl.run_single_step()
 
     def on_reset_click(self):
         self.paused_breakpoint_id = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
-        self.sim_ctrl.reset(self.current_setup_func)
+        self.sim_ctrl.reset(self.current_model)
         self.after(100, self.center_view)
 
     def _on_breakpoint_hit(self, event):
