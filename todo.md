@@ -5,3 +5,7 @@
 - adicionar modo headless para rodar a simulação sem interface gráfica, apenas com os break points programáticos e logs
 
 - adicionar controle da seed para quando a simulação for resetada, ela possa ser reproduzida exatamente igual
+
+- corrigir gif do readme para rodar em loop
+
+- revizar se a pasta assets faz sentido dentro de src
