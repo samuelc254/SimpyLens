@@ -56,6 +56,7 @@ class Viewer(tk.Tk):
         self.right_press_moved = False
         self.manual_layout_by_name = {}
         self.detail_windows = {}
+        self.last_breakpoint_hit = None
         self.layout_config_path = self._resolve_layout_config_path()
         self._load_manual_layout_cache()
 
@@ -75,7 +76,21 @@ class Viewer(tk.Tk):
         self.log_content_min_height = 100
         self.log_content_max_height = 600
 
+        self.breakpoint_panel_collapsed = False
+        self.breakpoint_panel_width = 320
+        self.breakpoint_panel_min_width = 220
+        self.breakpoint_panel_max_width = 560
+        self.breakpoint_resize_start_x = None
+        self.breakpoint_resize_start_width = 0
+        self.breakpoint_row_cache = []
+        self._breakpoint_refresh_job = None
+        self.paused_breakpoint_id = None
+
         self._setup_top_bar()
+        self.main_area = ttk.Frame(self)
+        self.main_area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.main_content = ttk.Frame(self.main_area)
+        self.main_content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._setup_log_panel()
         self._setup_canvas()
 
@@ -86,7 +101,11 @@ class Viewer(tk.Tk):
             schedule_cb=lambda ms, fn: self.after(ms, fn),
             speed_getter=lambda: self.scl_speed.get(),
             log_callback=self.log_message,
+            on_breakpoint_cb=self._on_breakpoint_hit,
         )
+
+        self._setup_breakpoint_panel()
+        self._refresh_breakpoint_panel()
 
         if self.current_setup_func:
             try:
@@ -170,10 +189,7 @@ class Viewer(tk.Tk):
         ttk.Button(
             btn_frame,
             text="⏯ Step",
-            command=lambda: (
-                self.sim_ctrl.set_setup_func(self.current_setup_func),
-                self.sim_ctrl.run_single_step(),
-            ),
+            command=self.on_step_click,
         ).pack(side=tk.LEFT, padx=2)
 
         ttk.Button(
@@ -185,10 +201,7 @@ class Viewer(tk.Tk):
         ttk.Button(
             btn_frame,
             text="⏹ Reset",
-            command=lambda: (
-                self.sim_ctrl.reset(self.current_setup_func),
-                self.after(100, self.center_view),
-            ),
+            command=self.on_reset_click,
         ).pack(side=tk.LEFT, padx=2)
 
         self.lbl_time = ttk.Label(bar, text="Time: 0.00", font=("Consolas", 14, "bold"))
@@ -205,8 +218,52 @@ class Viewer(tk.Tk):
         self.lbl_speed_val.pack(side=tk.LEFT, padx=(5, 0))
 
     def on_play_click(self):
+        self.paused_breakpoint_id = None
+        self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.set_setup_func(self.current_setup_func)
         self.sim_ctrl.run()
+
+    def on_step_click(self):
+        self.paused_breakpoint_id = None
+        self._refresh_breakpoint_panel(force=True, reschedule=False)
+        self.sim_ctrl.set_setup_func(self.current_setup_func)
+        self.sim_ctrl.run_single_step()
+
+    def on_reset_click(self):
+        self.paused_breakpoint_id = None
+        self._refresh_breakpoint_panel(force=True, reschedule=False)
+        self.sim_ctrl.reset(self.current_setup_func)
+        self.after(100, self.center_view)
+
+    def _on_breakpoint_hit(self, event):
+        self.last_breakpoint_hit = dict(event)
+        if event.get("pause_on_hit", True):
+            self.paused_breakpoint_id = event.get("breakpoint_id")
+            self._refresh_breakpoint_panel(force=True, reschedule=False)
+
+    def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
+        return self.sim_ctrl.add_breakpoint(
+            condition=condition,
+            label=label,
+            enabled=enabled,
+            pause_on_hit=pause_on_hit,
+            edge=edge,
+        )
+
+    def remove_breakpoint(self, breakpoint_id):
+        return self.sim_ctrl.remove_breakpoint(breakpoint_id)
+
+    def clear_breakpoints(self):
+        self.sim_ctrl.clear_breakpoints()
+
+    def set_breakpoint_enabled(self, breakpoint_id, enabled):
+        return self.sim_ctrl.set_breakpoint_enabled(breakpoint_id, enabled)
+
+    def set_breakpoint_pause_on_hit(self, breakpoint_id, pause_on_hit):
+        return self.sim_ctrl.set_breakpoint_pause_on_hit(breakpoint_id, pause_on_hit)
+
+    def list_breakpoints(self):
+        return self.sim_ctrl.list_breakpoints()
 
     def update_time_display(self, now):
         """Updates time label and calculates ticks/s in the interface."""
@@ -288,6 +345,211 @@ class Viewer(tk.Tk):
         self.log_find_popup.place_forget()
 
         scrollbar.config(command=self.txt_log.yview)
+
+    def _setup_breakpoint_panel(self):
+        self.breakpoint_panel = ttk.Frame(self.main_area, relief="raised", borderwidth=1)
+        self.breakpoint_panel.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.breakpoint_tab = tk.Canvas(
+            self.breakpoint_panel,
+            width=26,
+            bg="#d0d0d0",
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        self.breakpoint_tab.bind("<Button-1>", lambda _event: self.toggle_breakpoint_panel())
+        self.breakpoint_tab.bind("<Configure>", self._redraw_breakpoint_tab)
+
+        self.breakpoint_resize_handle = tk.Frame(self.breakpoint_panel, width=5, bg="#d0d0d0", cursor="sb_h_double_arrow")
+        self.breakpoint_resize_handle.pack(side=tk.LEFT, fill=tk.Y)
+        self.breakpoint_resize_handle.bind("<ButtonPress-1>", self._start_breakpoint_resize)
+        self.breakpoint_resize_handle.bind("<B1-Motion>", self._do_breakpoint_resize)
+        self.breakpoint_resize_handle.bind("<ButtonRelease-1>", self._stop_breakpoint_resize)
+
+        self.breakpoint_inner = ttk.Frame(self.breakpoint_panel, width=self.breakpoint_panel_width)
+        self.breakpoint_inner.pack(side=tk.LEFT, fill=tk.Y)
+        self.breakpoint_inner.pack_propagate(False)
+
+        header = ttk.Frame(self.breakpoint_inner)
+        header.pack(side=tk.TOP, fill=tk.X, padx=5, pady=4)
+
+        self.btn_toggle_breakpoint_panel = ttk.Button(
+            header,
+            text="▶",
+            width=3,
+            command=self.toggle_breakpoint_panel,
+        )
+        self.btn_toggle_breakpoint_panel.pack(side=tk.LEFT)
+
+        self.breakpoint_content = ttk.Frame(self.breakpoint_inner)
+        self.breakpoint_content.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=(0, 6))
+
+        tree_frame = ttk.Frame(self.breakpoint_content)
+        tree_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        bp_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+        bp_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.breakpoint_tree = ttk.Treeview(
+            tree_frame,
+            columns=("id", "label", "pause", "hits", "edge", "condition"),
+            show="headings",
+            selectmode="browse",
+            yscrollcommand=bp_scroll.set,
+            height=10,
+        )
+        self.breakpoint_tree.heading("id", text="ID")
+        self.breakpoint_tree.heading("label", text="Label")
+        self.breakpoint_tree.heading("pause", text="Pause")
+        self.breakpoint_tree.heading("hits", text="Hits")
+        self.breakpoint_tree.heading("edge", text="Edge")
+        self.breakpoint_tree.heading("condition", text="Condition")
+        self.breakpoint_tree.column("id", width=40, anchor="center", stretch=False)
+        self.breakpoint_tree.column("label", width=140, anchor="w", stretch=False)
+        self.breakpoint_tree.column("pause", width=58, anchor="center", stretch=False)
+        self.breakpoint_tree.column("hits", width=52, anchor="center", stretch=False)
+        self.breakpoint_tree.column("edge", width=62, anchor="center", stretch=False)
+        self.breakpoint_tree.column("condition", width=280, anchor="w", stretch=True)
+        self.breakpoint_tree.tag_configure("bp_paused", background="#d9f7d9")
+        self.breakpoint_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.breakpoint_tree.bind("<Button-1>", self._on_breakpoint_tree_click)
+        bp_scroll.config(command=self.breakpoint_tree.yview)
+
+    def _redraw_breakpoint_tab(self, _event=None):
+        if not hasattr(self, "breakpoint_tab"):
+            return
+
+        self.breakpoint_tab.delete("all")
+        width = max(1, int(self.breakpoint_tab.winfo_width()))
+        height = max(1, int(self.breakpoint_tab.winfo_height()))
+
+        self.breakpoint_tab.create_text(width / 2, 14, text="◀", fill="#111", font=("Segoe UI", 9, "bold"))
+        self.breakpoint_tab.create_text(
+            width / 2,
+            height / 2,
+            text="Breakpoint",
+            angle=90,
+            fill="#111",
+            font=("Segoe UI", 9, "bold"),
+        )
+
+    def toggle_breakpoint_panel(self):
+        if self.breakpoint_panel_collapsed:
+            self.breakpoint_tab.pack_forget()
+            self.breakpoint_resize_handle.pack(side=tk.LEFT, fill=tk.Y)
+            self.breakpoint_inner.pack(side=tk.LEFT, fill=tk.Y)
+            self.breakpoint_content.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=(0, 6))
+            self.btn_toggle_breakpoint_panel.config(text="▶")
+            self.breakpoint_panel_collapsed = False
+        else:
+            self.breakpoint_content.pack_forget()
+            self.breakpoint_inner.pack_forget()
+            self.breakpoint_resize_handle.pack_forget()
+            self.breakpoint_tab.pack(side=tk.RIGHT, fill=tk.Y)
+            self._redraw_breakpoint_tab()
+            self.breakpoint_panel_collapsed = True
+
+    def _start_breakpoint_resize(self, event):
+        self.breakpoint_resize_start_x = event.x_root
+        self.breakpoint_resize_start_width = max(self.breakpoint_panel_min_width, self.breakpoint_inner.winfo_width())
+
+    def _do_breakpoint_resize(self, event):
+        if self.breakpoint_resize_start_x is None:
+            return
+
+        delta_x = self.breakpoint_resize_start_x - event.x_root
+        new_width = self.breakpoint_resize_start_width + delta_x
+        new_width = max(self.breakpoint_panel_min_width, min(self.breakpoint_panel_max_width, new_width))
+
+        self.breakpoint_panel_width = int(new_width)
+        self.breakpoint_inner.configure(width=self.breakpoint_panel_width)
+        self.update_idletasks()
+
+    def _stop_breakpoint_resize(self, _event=None):
+        self.breakpoint_resize_start_x = None
+        self.breakpoint_resize_start_width = 0
+
+    def _on_breakpoint_tree_click(self, event):
+        region = self.breakpoint_tree.identify("region", event.x, event.y)
+        row_id = self.breakpoint_tree.identify_row(event.y)
+
+        if not row_id:
+            current_selection = self.breakpoint_tree.selection()
+            if current_selection:
+                self.breakpoint_tree.selection_remove(current_selection)
+            self.breakpoint_tree.focus("")
+            return
+
+        if region != "cell":
+            return
+
+        column = self.breakpoint_tree.identify_column(event.x)
+        try:
+            col_index = int(column.lstrip("#")) - 1
+        except ValueError:
+            return
+
+        columns = self.breakpoint_tree["columns"]
+        if col_index < 0 or col_index >= len(columns):
+            return
+
+        if columns[col_index] != "pause":
+            return
+
+        try:
+            breakpoint_id = int(row_id)
+        except ValueError:
+            return
+
+        bp_map = {bp["id"]: bp for bp in self.sim_ctrl.list_breakpoints()}
+        bp = bp_map.get(breakpoint_id)
+        if bp is None:
+            return "break"
+
+        new_value = not bool(bp.get("pause_on_hit", True))
+        self.sim_ctrl.set_breakpoint_pause_on_hit(breakpoint_id, new_value)
+        self._refresh_breakpoint_panel(force=True, reschedule=False)
+        self.breakpoint_tree.selection_set(row_id)
+        self.breakpoint_tree.focus(row_id)
+        return "break"
+
+    def _refresh_breakpoint_panel(self, force=False, reschedule=True):
+        if not hasattr(self, "breakpoint_tree"):
+            return
+
+        self._breakpoint_refresh_job = None
+
+        breakpoints = self.sim_ctrl.list_breakpoints() if hasattr(self, "sim_ctrl") and self.sim_ctrl else []
+        rows = [
+            (
+                bp["id"],
+                str(bp.get("label", "")),
+                "☑" if bp.get("pause_on_hit", True) else "☐",
+                str(bp.get("hit_count", 0)),
+                str(bp.get("edge", "none")),
+                str(bp.get("expression", "")),
+            )
+            for bp in breakpoints
+        ]
+
+        if force or rows != self.breakpoint_row_cache:
+            selected = self.breakpoint_tree.selection()
+            selected_id = selected[0] if selected else None
+
+            self.breakpoint_tree.delete(*self.breakpoint_tree.get_children())
+            for row in rows:
+                iid = str(row[0])
+                tags = ("bp_paused",) if self.paused_breakpoint_id == row[0] else ()
+                self.breakpoint_tree.insert("", tk.END, iid=iid, values=row, tags=tags)
+
+            if selected_id and self.breakpoint_tree.exists(selected_id):
+                self.breakpoint_tree.selection_set(selected_id)
+                self.breakpoint_tree.focus(selected_id)
+
+            self.breakpoint_row_cache = rows
+
+        if reschedule and self._breakpoint_refresh_job is None:
+            self._breakpoint_refresh_job = self.after(350, self._refresh_breakpoint_panel)
 
     def toggle_log_panel(self):
         if self.log_collapsed:
@@ -468,6 +730,24 @@ class Viewer(tk.Tk):
 
         if kind == "STATUS":
             event = payload.get("event", "UNKNOWN")
+            if event == "BREAKPOINT_HIT":
+                label = payload.get("label", "-")
+                condition = payload.get("condition") or payload.get("expression", "-")
+                hit_count = payload.get("hit_count", "?")
+                timestamp = float(payload.get("time", 0.0))
+                if str(label) == str(condition):
+                    return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_HIT | condition={condition} | hits={hit_count}"
+                return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_HIT | label={label} | condition={condition} | hits={hit_count}"
+
+            if event == "BREAKPOINT_ERROR":
+                label = payload.get("label", "-")
+                condition = payload.get("condition") or payload.get("expression", "-")
+                error_text = payload.get("error", "-")
+                timestamp = float(payload.get("time", 0.0))
+                if str(label) == str(condition):
+                    return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_ERROR | condition={condition} | error={error_text}"
+                return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_ERROR | label={label} | condition={condition} | error={error_text}"
+
             return f"[STATUS] {event}"
 
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -815,7 +1095,7 @@ class Viewer(tk.Tk):
         self.after(300, lambda: self._refresh_details_window(window_id))
 
     def _setup_canvas(self):
-        self.canvas_frame = tk.Frame(self)
+        self.canvas_frame = tk.Frame(self.main_content)
         self.canvas_frame.pack(fill=tk.BOTH, expand=True)
 
         self.canvas = tk.Canvas(self.canvas_frame, bg="#f0f0f0")

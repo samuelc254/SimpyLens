@@ -110,5 +110,8 @@ def setup(env):
 
 
 if __name__ == "__main__":
-    sim_view = simpylens.Viewer(setup_func=setup)
-    sim_view.mainloop()
+    manager = simpylens.Manager(setup_func=setup)
+    manager.add_breakpoint("len(oven.items) >= 5", label="Oven Batch Ready", edge="rising")
+    manager.add_breakpoint("shipping.level >= 10", edge="rising")
+    manager.add_breakpoint("env.now >= 50", edge="rising")
+    manager.viewer.mainloop()
