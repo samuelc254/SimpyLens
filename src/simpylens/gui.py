@@ -115,7 +115,7 @@ class Viewer(tk.Tk):
                 messagebox.showerror("Simulation Error", f"Error in setup():\n{exc}")
 
     def _set_app_icon(self):
-        icon_path = Path(__file__).resolve().parents[1] / "assets" / "icon.png"
+        icon_path = Path(__file__).resolve().parents[0] / "assets" / "icon.png"
         if not icon_path.exists():
             return
         try:

@@ -8,4 +8,7 @@
 
 - corrigir gif do readme para rodar em loop
 
-- revizar se a pasta assets faz sentido dentro de src
+- adicionar testes unitarios
+
+- adicionar rewind step (avaliar a viabilidade)
+
