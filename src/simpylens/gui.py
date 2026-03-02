@@ -21,12 +21,13 @@ class Viewer(tk.Tk):
         """
         apply_patch()
         super().__init__()
+        self._app_icon_image = None
+        self._set_app_icon()
         self.title(title)
         self.geometry("1000x800")
 
         self.env = None
         self.running = False
-        self.target_time = float("inf")
         self.scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
@@ -84,7 +85,6 @@ class Viewer(tk.Tk):
             update_time_cb=self.update_time_display,
             schedule_cb=lambda ms, fn: self.after(ms, fn),
             speed_getter=lambda: self.scl_speed.get(),
-            on_pause_cb=lambda: self.ent_target.config(state="normal"),
             log_callback=self.log_message,
         )
 
@@ -94,6 +94,16 @@ class Viewer(tk.Tk):
                 self.after(100, self.center_view)
             except Exception as exc:
                 messagebox.showerror("Simulation Error", f"Error in setup():\n{exc}")
+
+    def _set_app_icon(self):
+        icon_path = Path(__file__).resolve().parents[1] / "assets" / "icon.png"
+        if not icon_path.exists():
+            return
+        try:
+            self._app_icon_image = tk.PhotoImage(file=str(icon_path))
+            self.iconphoto(True, self._app_icon_image)
+        except Exception:
+            self._app_icon_image = None
 
     def _resolve_layout_config_path(self):
         setup_path = None
@@ -169,10 +179,7 @@ class Viewer(tk.Tk):
         ttk.Button(
             btn_frame,
             text="⏸ Pause",
-            command=lambda: (
-                self.sim_ctrl.pause(),
-                self.ent_target.config(state="normal"),
-            ),
+            command=lambda: self.sim_ctrl.pause(),
         ).pack(side=tk.LEFT, padx=2)
 
         ttk.Button(
@@ -180,7 +187,6 @@ class Viewer(tk.Tk):
             text="⏹ Reset",
             command=lambda: (
                 self.sim_ctrl.reset(self.current_setup_func),
-                self.ent_target.config(state="normal"),
                 self.after(100, self.center_view),
             ),
         ).pack(side=tk.LEFT, padx=2)
@@ -198,24 +204,9 @@ class Viewer(tk.Tk):
         self.lbl_speed_val = ttk.Label(spd_frame, text="0.0 tps", width=12)
         self.lbl_speed_val.pack(side=tk.LEFT, padx=(5, 0))
 
-        right_frame = ttk.Frame(bar)
-        right_frame.pack(side=tk.RIGHT, padx=5)
-
-        ttk.Label(right_frame, text="Break Point:").pack(side=tk.LEFT, padx=(5, 5))
-        self.ent_target = ttk.Entry(right_frame, width=10)
-        self.ent_target.insert(0, "")
-        self.ent_target.pack(side=tk.LEFT)
-
     def on_play_click(self):
-        try:
-            value = self.ent_target.get().strip()
-            self.sim_ctrl.target_time = float(value) if value else float("inf")
-            self.ent_target.config(state="disabled")
-            self.sim_ctrl.set_setup_func(self.current_setup_func)
-            self.sim_ctrl.run()
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Break Point must be a valid number.")
-            self.ent_target.config(state="normal")
+        self.sim_ctrl.set_setup_func(self.current_setup_func)
+        self.sim_ctrl.run()
 
     def update_time_display(self, now):
         """Updates time label and calculates ticks/s in the interface."""
