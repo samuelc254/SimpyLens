@@ -1,114 +1,128 @@
+# TODO v1 — SimpyLens
+
+## Backlog funcional
+
 - corrigir as animações/gerenciamento das animações, elas não estão sendo corretamente identificadas
-
-- melhorar desing dos "blocos" para representar melhor as filas os pedidos e para as stores mostrar melhor os produtos
-
-- adicionar modo headless para rodar a simulação sem interface gráfica, apenas com os break points programáticos e logs
-
-- adicionar controle da seed para quando a simulação for resetada, ela possa ser reproduzida exatamente igual
-
+- melhorar design dos "blocos" para representar melhor as filas, os pedidos e, para as stores, mostrar melhor os produtos
+- adicionar modo headless para rodar a simulação sem interface gráfica, apenas com breakpoints programáticos e logs
+- adicionar controle da seed para quando a simulação for resetada, ela poder ser reproduzida exatamente igual
 - corrigir gif do readme para rodar em loop
-
-- adicionar testes unitarios
-
+- adicionar testes unitários
 - adicionar rewind step (avaliar a viabilidade)
-
-- remover alias de time para breakpoint
-
-- deixar tamanho do log salvo configuravel e adicionar opção de salvar o log em um arquivo
-
-- refatorar viewer para não ser mais publico e deixar o manager como ponto de acesso principal
-
+- remover alias de `time` para breakpoint
+- deixar tamanho do log salvo configurável e adicionar opção de salvar o log em um arquivo
+- refatorar `Viewer` para não ser mais público e deixar `Lens` como ponto de acesso principal
 - adicionar coleta de métricas
-
 - adicionar teste de alterar breakpoints com a simulação rodando
+- adicionar descrição dos atributos dos breakpoints (descrição da classe aqui nesse documento)
+- adicionar especificação de quais métricas estarão disponíveis (aqui nesse documento descrever o que o MetricsPatch vai coletar e quais serão expostas na API pública)
 
+---
 
+## Arquitetura alvo
 
+- patch de métricas: renomear para `simpylens.MetricsPatch.apply()` para não confundir com patch do viewer
+    - independente de `simpylens.Lens`
+    - usável sem viewer e sem breakpoints
+    - aplicação idempotente
+- patch de tracking para viewer/log: renomear para `simpylens.TrackingPatch.apply()`
+    - independente de `simpylens.Lens`
+    - usável sem viewer e sem breakpoints
+    - aplicação idempotente
+- núcleo da biblioteca: `simpylens.Lens`
+    - classe principal que gerencia facilidades prontas: breakpoints, logs e viewer
+    - deve rodar opcionalmente sem viewer (headless)
+    - métricas e tracking continuam independentes
+    - seed reproduzível via `lens.seed`
+    - breakpoints via `lens.add_breakpoint()`
+    - viewer via `lens.viewer.mainloop()` quando `gui=True`
 
-
-
-monkey_patch (para coleta de metricas) - dar outro nome para não confundir com o patch que é aplicado para o viewer (nome ex: `MetricsPatch.apply()`) (não dependencia do manager, deve ser algo que o usuário possa usar mesmo sem usar o viewer manager ou breakpoints)
-monkey_patch (para coleta de dados para o viewer) (nome ex: `TrackingPatch.apply()`) (também não pode ser dependente do manager, tem que ser algo que o usuário possa usar mesmo sem usar o viewer manager ou breakpoints para fazer o tracking personalizado se quiser)
-manager de simulação (`Manager`) (o "core" de ferenciamento da biblioteca, ele quem gerencia as facilidades prontas como breakpoints, logs e o viewer, mas as metricas e tracking são independentes e podem ser usados sem o manager) (o manager deve ter capacidade de rodar sozinho sem o viewer, assim o usuario pode usar a solução que preferir de visualização)
-    controle da seed (`manager.seed`) (para permitir simulações reproduzíveis, mesmo quando resetadas)
-    sistema de breakpoints (`manager.add_breakpoints()`) (para usar breakpoint não tem como não ter o manager da biblioteca) (os breakpoints devem poder ser usados mesmo sem o viewer, mas eles vão depender do manager)
-    viewer (`manager.viewer.mainloop()`) (a interface grafica é a maior facilidade da biblioteca para o usuario analisar a simulação, deve ser como uma ferramenta que não tem intuido de alterar a simulação, apenas ferramentas que facilitem testar e analisar o que existe)
-
+---
 
 ## API pública mínima (v1)
 
 Objetivo: definir o contrato oficial para a v1 e evitar mudanças quebrando integração de usuários.
 
-### 1) Classe `Manager` (entrada principal)
+### 1) Classe `Lens` (entrada principal)
 
 Construtor:
-- `Manager(model=None, title="SimPyLens", gui=True, seed=42)`
+- `Lens(model=None, title="SimPyLens", gui=True, seed=42)`
 
 Contrato do parâmetro `model`:
-- `model` deve ser uma função/callable que recebe exatamente o ambiente de simulação como primeiro argumento.
+- `model` deve ser uma função/callable que recebe exatamente o ambiente de simulação (um objeto `simpy.Environment`)
+como primeiro argumento.
 - assinatura esperada: `def model(env: simpy.Environment): ...`
 
 Métodos oficiais:
 - `set_model(model)`
 - `set_seed(seed)`
-- `run()` (para simulação sem gui roda a simulação normalmente apenas com breakpoints e logs, para simulação com gui é equivalente a usar o `show()` e em seguida clicar no play do viewer (como é equivalente do `show()` + pressionar play o run também é bloqueante quando gui=True))
-- `step()` (independente do gui, avança a simulação em um passo, se gui = True, tem o mesmo efeito que clicar no botão de step do viewer)
-- `reset()` (reinicia a simulação, recriando o ambiente e reaplicando a seed, se gui = True, tem o mesmo efeito que clicar no botão de reset do viewer)
-- `add_breakpoint(condition, label=None, enabled=True, pause_on_hit=True, edge="none")` 
+- `run()` (sem GUI roda normalmente com breakpoints e logs; com GUI equivale a `show()` e depois play, portanto é bloqueante tanto quando `gui=True` como quando `gui=False`)
+- `step()` (independente do GUI, avança em um passo; com GUI equivale ao botão de step)
+- `reset()` (recria ambiente e reaplica seed; com GUI equivale ao botão de reset)
+- `add_breakpoint(condition, label=None, enabled=True, pause_on_hit=True, edge="none")` ou `add_breakpoint(breakpoint)`
 - `remove_breakpoint(breakpoint_id)`
 - `clear_breakpoints()`
 - `set_breakpoint_enabled(breakpoint_id, enabled)`
 - `set_breakpoint_pause_on_hit(breakpoint_id, pause_on_hit)`
-- `list_breakpoints()` (retornar uma lista de uma copia dos objetos de breakpoint atuais, sendo todos os atributos públicos de cada breakpoint, como id, condição, label, etc)
-- `show()` (inicia o gui e de forma bloqueante (como o show do matplot), para simulações sem gui, retorna um valor seguro)
-- `get_logs()` (retorna um json (a raiz do json deve ser uma lista e cada log é um item dessa lista))
-- `set_log_capacity(capacity)` (define a capacidade máxima de itens do log, ou seja, quantos eventos ele deve armazenar antes de começar a descartar os mais antigos, valor padrão 1000)
+- `list_breakpoints()` (retorna cópia da lista atual com todos os objetos de breakpoint)
+- `show()` (inicia GUI de forma bloqueante (mainloop do Tkinter)); sem GUI retorna valor seguro)
+- `get_logs()` (retorna JSON com raiz em lista)
+- `set_log_capacity(capacity)` (capacidade máxima do log; padrão 1000)
 
-
+Objetos de breakpoint:
+- `Lens.Breakpoint` (classe interna ou objeto compatível para `add_breakpoint()`)
+- atributos públicos:
+    - `id` (único, gerado automaticamente, imutável)
+    - `condition` (string, ex: `"env.now > 10 and len(env.queue) > 0"`)
+    - `label` (string, opcional, para identificação amigável)
+    - `enabled` (bool)
+    - `pause_on_hit` (bool)
+    - `edge` (`"none"`, `"rising"`, `"falling"`)
 
 Atributos públicos esperados:
-- `manager.model` (apenas leitura, para escrita usar `set_model()`)
-- `manager.seed` (apenas leitura, para escrita usar `set_seed()`)
-- `manager.title`   (apenas leitura, definido no construtor)
-- `manager.gui` (apenas leitura)
+- `lens.model` (somente leitura, escrita via `set_model()`)
+- `lens.seed` (somente leitura, escrita via `set_seed()`)
+- `lens.title` (somente leitura, definido no construtor)
+- `lens.gui` (somente leitura, definido no construtor)
 
 Regras de comportamento v1:
-- `reset()` sempre recria o ambiente e reaplica `seed`.
-- `run()` e `show()` sem `model` definido não deve quebrar (retorno seguro).
-- breakpoints funcionam com ou sem UI (dependem do `Manager`).
-- quando `gui=True`, o `Manager` é responsável por criar e gerenciar o ciclo de vida do viewer.
-- `Viewer` não faz parte da API pública da v1.
+- `reset()` sempre recria o ambiente e reaplica `seed`
+- `run()` e `show()` sem `model` definido não devem quebrar (retorno seguro)
+- breakpoints funcionam com ou sem UI (dependem de `Lens`)
+- quando `gui=True`, `Lens` cria e gerencia o ciclo de vida do viewer
+- `Viewer` não faz parte da API pública 
 
 ---
 
 ### 2) Componente interno `Viewer` (não público)
 
 Diretriz de arquitetura:
-- `Viewer` é interno da biblioteca e não deve ser usado como ponto de entrada pelo usuário final.
-- somente o `Manager` pode criar e gerenciar o `Viewer`.
+- `Viewer` é interno da biblioteca e não deve ser usado como ponto de entrada pelo usuário final
+- somente `Lens` pode criar e gerenciar o `Viewer`
 
 Objetivo do componente:
-- Visualizar e inspecionar a simulação.
-- Não alterar regras de negócio do modelo do usuário.
+- visualizar e inspecionar a simulação
+- não alterar regras de negócio do modelo do usuário
 
 Contrato de produto:
-- não exportar `Viewer` como API oficial da v1.
-- exemplos e documentação devem usar apenas `Manager` como entrada.
+- não exportar `Viewer` como API oficial da v1
+- exemplos e documentação devem usar apenas `Lens` como entrada
 
 ---
 
 ### 3) Patch de tracking (independente)
 
 Classe pública proposta:
-- `TrackingPatch.apply()`
+- `simpylens.TrackingPatch.apply()`
 
 Escopo:
-- Coleta de dados de tracking para visualização/log.
-- Uso independente de `Manager` e `Viewer`.
+- coleta de dados de tracking para visualização/log
+- uso independente de `Lens`, e `MetricsPatch`
 
 Contrato mínimo:
-- Aplicação idempotente (chamar duas vezes não deve quebrar).
-- Não exigir UI para funcionar.
+- aplicação idempotente (chamar duas vezes não deve quebrar)
+- não exigir UI para funcionar
+- usar em conjunto com `MetricsPatch` deve ser possível, mas não obrigatório
 
 ---
 
@@ -118,25 +132,103 @@ Classe pública proposta:
 - `MetricsPatch.apply()`
 
 Escopo:
-- Coleta de métricas (contadores, tempos, throughput, etc).
-- Uso independente de `Manager`, `Viewer` e breakpoints.
+- coleta de métricas (contadores, tempos, throughput, etc)
+- uso independente de `Lens`, `TrackingPatch` e breakpoints
 
 Contrato mínimo:
-- Aplicação idempotente.
-- API de leitura/export de métricas definida e estável na v1.
+- aplicação idempotente
+- API de leitura/export de métricas definida e estável na v1
+- usar em conjunto com `TrackingPatch` deve ser possível, mas não obrigatório
 
 ---
 
 ### 5) Convenções gerais da API v1
 
-- Nome oficial para função de entrada do usuário: `model`.
-- Não usar alias legados na API pública v1.
-- Métodos públicos devem ter docstring com exemplo curto.
-- Alterações breaking só em v2+.
+- nome oficial para função de entrada do usuário: `model`
+- não usar aliases legados na API pública v1
+- métodos públicos devem ter docstring com exemplo curto
+- alterações breaking só em v2+
 
 ---
 
-### 6) Exemplo de uso mínimo (contrato v1)
+### 6) Contrato de logs (interno eficiente + saída JSON)
+
+Objetivo:
+- internamente, logs devem ser tratados com estrutura eficiente para escrita frequente (append O(1), capacidade limitada e descarte dos mais antigos)
+- externamente, logs devem sempre sair como JSON estável via `lens.get_logs()`
+
+Estrutura interna esperada (não pública):
+- buffer circular/fila limitada (`log_capacity`, padrão 1000)
+- itens podem ser armazenados internamente como dicts Python ou estrutura equivalente otimizada
+- serialização para JSON deve acontecer somente no boundary público (`get_logs()`/export)
+
+Formato público obrigatório (`get_logs()`):
+- retorno deve ser uma lista JSON, onde cada item é um objeto de log
+- cada objeto deve conter no mínimo:
+        - `schema_version` (string, ex: `"1.0"`)
+        - `seq` (inteiro crescente, único por execução)
+        - `kind` (string de categoria alta, ex: `"STATUS"`, `"SIM"`, `"RESOURCE"`, `"BREAKPOINT"`, `"ERROR"`)
+        - `event` (string curta e estável, ex: `"RESET"`, `"STEP"`, `"BREAKPOINT_HIT"`)
+        - `time` (tempo da simulação, numérico)
+- campos recomendados:
+        - `level` (`"DEBUG"`, `"INFO"`, `"WARN"`, `"ERROR"`)
+        - `source` (origem do evento, ex: `"lens"`, `"tracking"`, `"metrics"`, `"viewer"`)
+        - `message` (resumo legível para humano)
+        - `data` (objeto JSON com payload específico do evento)
+
+Padrões de nomenclatura e compatibilidade:
+- nomes de chaves em `snake_case`
+- `kind` e `event` em maiúsculas com `_` (ex: `BREAKPOINT_ERROR`)
+- eventos já existentes devem manter nomenclatura estável para não quebrar integrações
+- novos campos só podem ser adicionados de forma backward-compatible (sem remover/renomear campos obrigatórios na v1)
+
+Regras de comportamento:
+- `lens.set_log_capacity(capacity)` altera o tamanho máximo do buffer; ao exceder, descarta do mais antigo para o mais novo
+- `lens.get_logs()` sempre retorna snapshot serializável em JSON, sem expor referências internas mutáveis
+- logs devem funcionar com e sem GUI
+- erro de avaliação de breakpoint deve gerar evento `BREAKPOINT_ERROR`
+- disparo de breakpoint deve gerar evento `BREAKPOINT_HIT`
+
+Exemplos de eventos v1:
+
+```json
+{
+    "schema_version": "1.0",
+    "seq": 12,
+    "kind": "STATUS",
+    "event": "RESET",
+    "time": 0.0,
+    "level": "INFO",
+    "source": "lens",
+    "message": "Simulation reset",
+    "data": {"seed": 42}
+}
+```
+
+```json
+{
+    "schema_version": "1.0",
+    "seq": 57,
+    "kind": "BREAKPOINT",
+    "event": "BREAKPOINT_HIT",
+    "time": 24.0,
+    "level": "INFO",
+    "source": "lens",
+    "message": "Breakpoint hit",
+    "data": {
+        "breakpoint_id": 3,
+        "label": "fila cheia",
+        "condition": "len(resources['Queue'].queue) > 5",
+        "hit_count": 2,
+        "pause_on_hit": true,
+        "edge": "rising"
+    }
+}
+```
+
+---
+
+### 7) Exemplo de uso mínimo (contrato v1)
 
 ```python
 import simpylens
@@ -146,7 +238,6 @@ def model(env):
     pass
 
 
-manager = simpylens.Manager(model=model, with_ui=True, seed=42)
-manager.run()
-manager.viewer.mainloop()
+lens = simpylens.Lens(model=model)
+lens.show()
 ```
