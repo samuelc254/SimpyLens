@@ -2,25 +2,14 @@
 
 ## Backlog funcional
 
-- corrigir as animações/gerenciamento das animações, elas não estão sendo corretamente identificadas (passo futuro)
-- melhorar design dos "blocos" para representar melhor as filas, os pedidos e, para as stores, mostrar melhor os produtos (passo futuro)
 - adicionar modo headless para rodar a simulação sem interface gráfica, apenas com breakpoints programáticos e logs
-- adicionar controle da seed para quando a simulação for resetada, ela poder ser reproduzida exatamente igual
 - corrigir gif do readme para rodar em loop (passo futuro)
 - adicionar testes unitários (passo futuro)
 - adicionar rewind step (avaliar a viabilidade) (passo futuro)
-- remover alias de `time` para breakpoint
 - deixar tamanho do log salvo configurável e adicionar opção de salvar o log em um arquivo
-- refatorar `Viewer` para não ser mais público e deixar `Lens` como ponto de acesso principal 
-- adicionar coleta de métricas (passo futuro)
-- adicionar especificação de quais métricas estarão disponíveis (aqui nesse documento descrever o que o MetricsPatch vai coletar e quais serão expostas na API pública) (passo futuro)
 - adicionar teste de alterar breakpoints com a simulação rodando (passo futuro)
-- o tracking patch deve adicionar ao simpy.Enviroment os itens:
-    - tracked_resources = weakref.WeakSet()
-    - pending_transfers = []
-    - step_logs = []
-    - process_locations = weakref.WeakKeyDictionary()
-
+- adicionar mais metricas de fila, media de itens na fila, min e max (fila de put get e fila de request)
+- verificar pq o patch de tracking tem original resoucer salvo como classe e o patch de metricas não
 
 
 ---
@@ -52,7 +41,7 @@ Objetivo: definir o contrato oficial para a v1 e evitar mudanças quebrando inte
 ### 1) Classe `Lens` (entrada principal)
 
 Construtor:
-- `Lens(model=None, title="SimPyLens", gui=True, seed=42)`
+- `Lens(model=None, title="SimPyLens", gui=True , metrics=True, seed=42)` (se metrics true aplica `MetricsPatch` automaticamente; se false, não aplica e não coleta métricas)
 
 Contrato do parâmetro `model`:
 - `model` deve ser uma função/callable que recebe exatamente o ambiente de simulação (um objeto `simpy.Environment`)
@@ -145,6 +134,29 @@ Contrato mínimo:
 - aplicação idempotente
 - API de leitura/export de métricas definida e estável na v1
 - usar em conjunto com `TrackingPatch` deve ser possível, mas não obrigatório
+
+- `<Resource/Store/Container>` deve ter um atributo público `metrics` com as métricas atuais, atualizadas em tempo real, e expostas de forma consistente (ex: `my_resource.metrics.example_metric`)
+
+- `Resource` deve ter métricas publicas de: (todos somente leitura, sem setters públicos)
+    - tempo mínimo, médio e máximo de espera na fila (tempo entre `request` e obtenção do recurso)
+    - tempo mínimo, médio e máximo de uso do recurso (tempo entre `request` e `release` do mesmo processo)
+    - contagem total de aquisições do recurso e liberações
+    - porcentagem de de tempo total que o recurso ficou ocioso (sem processos usando) vs ocupado (pelo menos um processo usando)
+    - mínima, média e máxima quantidade de quantidade de processos sendo atendidos simultaneamente ao longo da simulação (para recursos com `capacity > 1`)
+
+- `Store` deve ter métricas públicas de: (todos somente leitura, sem setters públicos)
+    - tempo mínimo, médio e máximo de espera para retirada de item (tempo entre `get` e obtenção do item)
+    - tempo mínimo, médio e máximo de espera para depósito de item (tempo entre `put` e aceitação do item)
+    - contagem total de itens depositados
+    - contagem total de itens retirados
+    - nível mínimo, médio e máximo da store ao longo do tempo (para avaliar se está frequentemente cheia, vazia ou em um nível intermediário)
+
+- `Container` deve ter métricas públicas de: (todos somente leitura, sem setters públicos)
+    - tempo mínimo, médio e máximo de espera para retirada de quantidade por unidade (tempo entre `get` e obtenção da quantidade divida pela quantidade solicitada)
+    - tempo mínimo, médio e máximo de espera para depósito de quantidade por unidade (tempo entre `put` e aceitação da quantidade divida pela quantidade solicitada)
+    - contagem total de quantidade depositada
+    - contagem total de quantidade retirada
+    - nível mínimo, médio e máximo do container ao longo do tempo (para avaliar se está frequentemente cheio, vazio ou em um nível intermediário)
 
 ---
 

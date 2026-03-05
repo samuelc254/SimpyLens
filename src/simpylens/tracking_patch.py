@@ -659,14 +659,29 @@ class TrackedEnvironment(simpy.Environment):
 
 
 def _apply_tracking_patch():
-    simpy.Resource = TrackedResource
-    simpy.PriorityResource = TrackedPriorityResource
-    simpy.PreemptiveResource = TrackedPreemptiveResource
-    simpy.Container = TrackedContainer
-    simpy.Store = TrackedStore
-    simpy.PriorityStore = TrackedPriorityStore
-    simpy.FilterStore = TrackedFilterStore
-    simpy.Environment = TrackedEnvironment
+    def _compose(tracked_cls, current_cls):
+        # Already includes tracking behavior.
+        if issubclass(current_cls, tracked_cls):
+            return current_cls
+
+        # Tracking class already extends the current base.
+        if issubclass(tracked_cls, current_cls):
+            return tracked_cls
+
+        class _Composed(tracked_cls, current_cls):
+            pass
+
+        _Composed.__name__ = f"{tracked_cls.__name__}With{current_cls.__name__}"
+        return _Composed
+
+    simpy.Resource = _compose(TrackedResource, simpy.Resource)
+    simpy.PriorityResource = _compose(TrackedPriorityResource, simpy.PriorityResource)
+    simpy.PreemptiveResource = _compose(TrackedPreemptiveResource, simpy.PreemptiveResource)
+    simpy.Container = _compose(TrackedContainer, simpy.Container)
+    simpy.Store = _compose(TrackedStore, simpy.Store)
+    simpy.PriorityStore = _compose(TrackedPriorityStore, simpy.PriorityStore)
+    simpy.FilterStore = _compose(TrackedFilterStore, simpy.FilterStore)
+    simpy.Environment = _compose(TrackedEnvironment, simpy.Environment)
 
 
 class TrackingPatch:

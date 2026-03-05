@@ -836,6 +836,23 @@ class Viewer(tk.Tk):
         except Exception:
             return repr(item)
 
+    def _collect_metrics_rows(self, resource):
+        metrics_obj = getattr(resource, "metrics", None)
+        if metrics_obj is None:
+            return []
+
+        names = [name for name in dir(metrics_obj) if not name.startswith("_")]
+        rows = []
+        for name in sorted(set(names)):
+            try:
+                value = getattr(metrics_obj, name)
+            except Exception:
+                continue
+            if callable(value):
+                continue
+            rows.append((str(name), str(value)))
+        return rows
+
     def _collect_resource_details(self, resource):
         class_name = resource.__class__.__name__
         visual_type = getattr(resource, "visual_type", class_name)
@@ -878,6 +895,8 @@ class Viewer(tk.Tk):
             "internal_queue_count": "N/A" if internal_queue_count is None else str(internal_queue_count),
             "store_items": store_items,
             "sim_time": f"{sim_time:.2f}",
+            "metrics_rows": self._collect_metrics_rows(resource),
+            "is_store": bool(class_name.endswith("Store")),
         }
 
     def _open_details_window(self, resource):
@@ -891,8 +910,18 @@ class Viewer(tk.Tk):
 
         details_win = tk.Toplevel(self)
         details_win.title("Resource Details")
-        details_win.geometry("620x460")
-        details_win.minsize(520, 360)
+        is_store_resource = resource.__class__.__name__.endswith("Store")
+        base_width = 620
+        base_height = 713
+        min_width = 520
+        min_height = 558
+
+        if not is_store_resource:
+            base_height = int(round(base_height * 0.8))
+            min_height = int(round(min_height * 0.8))
+
+        details_win.geometry(f"{base_width}x{base_height}")
+        details_win.minsize(min_width, min_height)
 
         root = ttk.Frame(details_win, padding=10)
         root.pack(fill=tk.BOTH, expand=True)
@@ -920,9 +949,35 @@ class Viewer(tk.Tk):
             value_labels[key] = value
 
         ttk.Separator(root, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(10, 8))
-        ttk.Label(root, text="Store Items (detailed view):").pack(anchor="w")
 
-        find_frame = ttk.Frame(root)
+        ttk.Label(root, text="Active Metrics:").pack(anchor="w")
+        metrics_frame = ttk.Frame(root)
+        metrics_frame.pack(fill=tk.BOTH, expand=False, pady=(4, 8))
+        metrics_scroll = ttk.Scrollbar(metrics_frame, orient=tk.VERTICAL)
+        metrics_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        metrics_tree = ttk.Treeview(
+            metrics_frame,
+            columns=("metric", "value"),
+            show="headings",
+            selectmode="none",
+            yscrollcommand=metrics_scroll.set,
+            height=6,
+        )
+        metrics_tree.heading("metric", text="Metric")
+        metrics_tree.heading("value", text="Value")
+        metrics_tree.column("metric", width=220, anchor="w", stretch=True)
+        metrics_tree.column("value", width=320, anchor="w", stretch=True)
+        metrics_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        metrics_scroll.config(command=metrics_tree.yview)
+
+        store_separator = ttk.Separator(root, orient=tk.HORIZONTAL)
+        store_separator.pack(fill=tk.X, pady=(10, 8))
+        store_section = ttk.Frame(root)
+        store_section.pack(fill=tk.BOTH, expand=True)
+        store_label = ttk.Label(store_section, text="Store Items (detailed view):")
+        store_label.pack(anchor="w")
+
+        find_frame = ttk.Frame(store_section)
         find_frame.pack(fill=tk.X, pady=(4, 4))
         ttk.Label(find_frame, text="Find:").pack(side=tk.LEFT, padx=(0, 4))
         details_find_var = tk.StringVar(value="")
@@ -935,7 +990,7 @@ class Viewer(tk.Tk):
         find_counter = ttk.Label(find_frame, text="0/0", width=6, anchor="e")
         find_counter.pack(side=tk.RIGHT)
 
-        items_frame = ttk.Frame(root)
+        items_frame = ttk.Frame(store_section)
         items_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
         items_scroll = ttk.Scrollbar(items_frame, orient=tk.VERTICAL)
         items_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -963,6 +1018,11 @@ class Viewer(tk.Tk):
             "window": details_win,
             "resource_ref": weakref.ref(resource),
             "value_labels": value_labels,
+            "metrics_tree": metrics_tree,
+            "metrics_frame": metrics_frame,
+            "last_metrics_rows": None,
+            "store_separator": store_separator,
+            "store_section": store_section,
             "items_text": items_text,
             "last_items_blob": None,
             "find_var": details_find_var,
@@ -1082,6 +1142,8 @@ class Viewer(tk.Tk):
         if resource is None:
             for label in entry["value_labels"].values():
                 label.config(text="Unavailable")
+            metrics_rows = []
+            show_store_section = False
             items_blob = "Resource no longer available."
         else:
             details = self._collect_resource_details(resource)
@@ -1094,6 +1156,8 @@ class Viewer(tk.Tk):
             entry["value_labels"]["put_queue_count"].config(text=details["put_queue_count"])
             entry["value_labels"]["get_queue_count"].config(text=details["get_queue_count"])
             entry["value_labels"]["internal_queue_count"].config(text=details["internal_queue_count"])
+            metrics_rows = list(details.get("metrics_rows", []))
+            show_store_section = bool(details.get("is_store", False))
 
             if details["store_items"] is None:
                 items_blob = "Detailed items are available for Store resources only."
@@ -1102,7 +1166,38 @@ class Viewer(tk.Tk):
             else:
                 items_blob = "\n".join(details["store_items"])
 
-        if items_blob != entry["last_items_blob"]:
+        if metrics_rows != entry["last_metrics_rows"]:
+            metrics_tree = entry["metrics_tree"]
+            metrics_tree.delete(*metrics_tree.get_children())
+            if metrics_rows:
+                for metric_name, metric_value in metrics_rows:
+                    metrics_tree.insert("", tk.END, values=(metric_name, metric_value))
+            else:
+                metrics_tree.insert("", tk.END, values=("-", "No active metrics"))
+            entry["last_metrics_rows"] = metrics_rows
+
+        metrics_frame = entry.get("metrics_frame")
+        store_separator = entry.get("store_separator")
+        store_section = entry.get("store_section")
+        if show_store_section:
+            if metrics_frame is not None:
+                metrics_frame.pack_configure(expand=False)
+            if store_separator is not None and not store_separator.winfo_ismapped():
+                store_separator.pack(fill=tk.X, pady=(10, 8), before=store_section)
+            if store_section is not None and not store_section.winfo_ismapped():
+                store_section.pack(fill=tk.BOTH, expand=True)
+        else:
+            if metrics_frame is not None:
+                metrics_frame.pack_configure(expand=True)
+            if store_separator is not None and store_separator.winfo_ismapped():
+                store_separator.pack_forget()
+            if store_section is not None and store_section.winfo_ismapped():
+                store_section.pack_forget()
+            entry["find_matches"] = []
+            entry["find_index"] = -1
+            entry["find_counter_label"].config(text="0/0")
+
+        if show_store_section and items_blob != entry["last_items_blob"]:
             items_text = entry["items_text"]
             items_text.config(state="normal")
             items_text.delete("1.0", tk.END)
@@ -1705,7 +1800,7 @@ class Viewer(tk.Tk):
 
         name = getattr(resource, "visual_name", "Resource")
         self.canvas.create_text(x + 10 * self.scale, y + 20 * self.scale, text=name, anchor="w", font=font_title)
-        self.canvas.create_text(x + 10 * self.scale, y + 40 * self.scale, text=f"{kind} (Cap: {capacity})", anchor="w", font=font_sub)
+        self.canvas.create_text(x + 10 * self.scale, y + 40 * self.scale, text=f"{kind}", anchor="w", font=font_sub)
 
         bar_x = x + 10 * self.scale
         bar_y = y + 60 * self.scale

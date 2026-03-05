@@ -78,10 +78,28 @@ Main exports:
 - `simpylens.TrackingPatch`
 - `simpylens.MetricsPatch`
 
+Metrics patch activation:
+
+```python
+import simpylens
+
+simpylens.MetricsPatch.apply()
+```
+
+Public readonly metrics exposed after applying `MetricsPatch`:
+
+- Access pattern: `resource.metrics.<metric_name>`
+- `Resource`, `PriorityResource`, `PreemptiveResource`:
+`resource.metrics.queue_wait_time_min`, `resource.metrics.queue_wait_time_avg`, `resource.metrics.queue_wait_time_max`, `resource.metrics.usage_time_min`, `resource.metrics.usage_time_avg`, `resource.metrics.usage_time_max`, `resource.metrics.total_acquisitions`, `resource.metrics.idle_time_pct`, `resource.metrics.busy_time_pct`, `resource.metrics.concurrent_users_min`, `resource.metrics.concurrent_users_avg`, `resource.metrics.concurrent_users_max`
+- `Store`, `PriorityStore`, `FilterStore`:
+`resource.metrics.get_wait_time_min`, `resource.metrics.get_wait_time_avg`, `resource.metrics.get_wait_time_max`, `resource.metrics.put_wait_time_min`, `resource.metrics.put_wait_time_avg`, `resource.metrics.put_wait_time_max`, `resource.metrics.total_items_put`, `resource.metrics.total_items_got`, `resource.metrics.level_min`, `resource.metrics.level_avg`, `resource.metrics.level_max`
+- `Container`:
+`resource.metrics.get_wait_time_per_unit_min`, `resource.metrics.get_wait_time_per_unit_avg`, `resource.metrics.get_wait_time_per_unit_max`, `resource.metrics.put_wait_time_per_unit_min`, `resource.metrics.put_wait_time_per_unit_avg`, `resource.metrics.put_wait_time_per_unit_max`, `resource.metrics.total_amount_put`, `resource.metrics.total_amount_got`, `resource.metrics.level_min`, `resource.metrics.level_avg`, `resource.metrics.level_max`
+
 Recommended entrypoint: `Lens`
 
 ```python
-lens = simpylens.Lens(model=setup, title="Demo", gui=True)
+lens = simpylens.Lens(model=setup, title="Demo", gui=True, metrics=True)
 lens.run()
 lens.pause()
 lens.step()

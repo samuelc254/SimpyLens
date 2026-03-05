@@ -6,6 +6,7 @@ from collections import deque
 from typing import Iterable, Optional
 
 from .breakpoint import Breakpoint
+from .metrics_patch import MetricsPatch
 from .tracking_patch import TrackingPatch
 
 
@@ -481,12 +482,15 @@ class SimulationController:
 
 
 class Lens:
-    def __init__(self, model=None, title="SimPyLens", gui=True, seed=42):
+    def __init__(self, model=None, title="SimPyLens", gui=True, metrics=True, seed=42):
+        if metrics:
+            MetricsPatch.apply()
         TrackingPatch.apply()
 
         self._model = model
         self._title = title
         self._gui = bool(gui)
+        self._metrics = bool(metrics)
         self._seed = 42 if seed is None else seed
 
         self.viewer = None
@@ -526,6 +530,10 @@ class Lens:
     @property
     def gui(self):
         return self._gui
+
+    @property
+    def metrics(self):
+        return self._metrics
 
     @property
     def sim_ctrl(self):
