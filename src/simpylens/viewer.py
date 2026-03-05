@@ -1,4 +1,3 @@
-from .monkey_patch import tracked_resources, pending_transfers, apply_patch
 from .sim_manager import SimulationController
 import json
 import time
@@ -11,15 +10,14 @@ from pathlib import Path
 
 
 class Viewer(tk.Tk):
-    def __init__(self, setup_func=None, title="SimPyLens"):
+    def __init__(self, model=None, title="SimPyLens", seed=None):
         """
         Initializes SimPyLens.
 
-        :param setup_func: A function that takes a simpy.Environment as its only argument
-                           and sets up the simulation (creates resources, processes, etc).
+        :param model: A function that takes a simpy.Environment as its only argument
+                      and sets up the simulation (creates resources, processes, etc).
         :param title: Window title.
         """
-        apply_patch()
         super().__init__()
         self._app_icon_image = None
         self._set_app_icon()
@@ -32,7 +30,7 @@ class Viewer(tk.Tk):
         self.offset_x = 0.0
         self.offset_y = 0.0
 
-        self.current_setup_func = setup_func
+        self.current_model = model
 
         self.obj_coords_cache = weakref.WeakKeyDictionary()
         self.active_animations = []
@@ -102,17 +100,30 @@ class Viewer(tk.Tk):
             speed_getter=lambda: self.scl_speed.get(),
             log_callback=self.log_message,
             on_breakpoint_cb=self._on_breakpoint_hit,
+            seed=42 if seed is None else seed,
         )
 
         self._setup_breakpoint_panel()
         self._refresh_breakpoint_panel()
 
-        if self.current_setup_func:
+        if self.current_model:
             try:
-                self.sim_ctrl.reset(self.current_setup_func)
+                self.sim_ctrl.reset(self.current_model)
                 self.after(100, self.center_view)
             except Exception as exc:
                 messagebox.showerror("Simulation Error", f"Error in setup():\n{exc}")
+
+    def _tracked_resources(self):
+        env = self.sim_ctrl.env if hasattr(self, "sim_ctrl") and self.sim_ctrl else None
+        if env is None:
+            return ()
+        return getattr(env, "tracked_resources", ())
+
+    def _pending_transfers(self):
+        env = self.sim_ctrl.env if hasattr(self, "sim_ctrl") and self.sim_ctrl else None
+        if env is None:
+            return []
+        return getattr(env, "pending_transfers", [])
 
     def _set_app_icon(self):
         icon_path = Path(__file__).resolve().parents[0] / "assets" / "icon.png"
@@ -126,8 +137,8 @@ class Viewer(tk.Tk):
 
     def _resolve_layout_config_path(self):
         setup_path = None
-        if self.current_setup_func and hasattr(self.current_setup_func, "__code__"):
-            setup_path = Path(self.current_setup_func.__code__.co_filename).resolve()
+        if self.current_model and hasattr(self.current_model, "__code__"):
+            setup_path = Path(self.current_model.__code__.co_filename).resolve()
 
         if setup_path is not None:
             return setup_path.parent / f".{setup_path.stem}.simpy_layout.json"
@@ -152,7 +163,7 @@ class Viewer(tk.Tk):
 
     def _save_manual_layout_cache(self):
         positions = {name: [float(coords[0]), float(coords[1])] for name, coords in self.manual_layout_by_name.items() if coords and len(coords) == 2}
-        for resource in list(tracked_resources):
+        for resource in list(self._tracked_resources()):
             if resource not in self.manual_block_positions:
                 continue
             coords = self.manual_block_positions.get(resource)
@@ -220,19 +231,19 @@ class Viewer(tk.Tk):
     def on_play_click(self):
         self.paused_breakpoint_id = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
-        self.sim_ctrl.set_setup_func(self.current_setup_func)
+        self.sim_ctrl.set_model(self.current_model)
         self.sim_ctrl.run()
 
     def on_step_click(self):
         self.paused_breakpoint_id = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
-        self.sim_ctrl.set_setup_func(self.current_setup_func)
+        self.sim_ctrl.set_model(self.current_model)
         self.sim_ctrl.run_single_step()
 
     def on_reset_click(self):
         self.paused_breakpoint_id = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
-        self.sim_ctrl.reset(self.current_setup_func)
+        self.sim_ctrl.reset(self.current_model)
         self.after(100, self.center_view)
 
     def _on_breakpoint_hit(self, event):
@@ -411,6 +422,7 @@ class Viewer(tk.Tk):
         self.breakpoint_tree.column("edge", width=62, anchor="center", stretch=False)
         self.breakpoint_tree.column("condition", width=280, anchor="w", stretch=True)
         self.breakpoint_tree.tag_configure("bp_paused", background="#d9f7d9")
+        self.breakpoint_tree.tag_configure("bp_error", background="#ffd9d9")
         self.breakpoint_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.breakpoint_tree.bind("<Button-1>", self._on_breakpoint_tree_click)
         bp_scroll.config(command=self.breakpoint_tree.yview)
@@ -501,12 +513,12 @@ class Viewer(tk.Tk):
         except ValueError:
             return
 
-        bp_map = {bp["id"]: bp for bp in self.sim_ctrl.list_breakpoints()}
+        bp_map = {getattr(bp, "id", None): bp for bp in self.sim_ctrl.list_breakpoints()}
         bp = bp_map.get(breakpoint_id)
         if bp is None:
             return "break"
 
-        new_value = not bool(bp.get("pause_on_hit", True))
+        new_value = not bool(getattr(bp, "pause_on_hit", True))
         self.sim_ctrl.set_breakpoint_pause_on_hit(breakpoint_id, new_value)
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.breakpoint_tree.selection_set(row_id)
@@ -520,27 +532,37 @@ class Viewer(tk.Tk):
         self._breakpoint_refresh_job = None
 
         breakpoints = self.sim_ctrl.list_breakpoints() if hasattr(self, "sim_ctrl") and self.sim_ctrl else []
-        rows = [
-            (
-                bp["id"],
-                str(bp.get("label", "")),
-                "☑" if bp.get("pause_on_hit", True) else "☐",
-                str(bp.get("hit_count", 0)),
-                str(bp.get("edge", "none")),
-                str(bp.get("expression", "")),
+        row_models = []
+        for bp in breakpoints:
+            row_models.append(
+                {
+                    "id": getattr(bp, "id", 0),
+                    "label": str(getattr(bp, "label", "")),
+                    "pause": "☑" if getattr(bp, "pause_on_hit", True) else "☐",
+                    "hits": str(getattr(bp, "hit_count", 0)),
+                    "edge": str(getattr(bp, "edge", "none")),
+                    "condition": str(getattr(bp, "expression", "")),
+                    "has_error": bool(getattr(bp, "last_error", None)),
+                }
             )
-            for bp in breakpoints
-        ]
+
+        rows = [(model["id"], model["label"], model["pause"], model["hits"], model["edge"], model["condition"], model["has_error"]) for model in row_models]
 
         if force or rows != self.breakpoint_row_cache:
             selected = self.breakpoint_tree.selection()
             selected_id = selected[0] if selected else None
 
             self.breakpoint_tree.delete(*self.breakpoint_tree.get_children())
-            for row in rows:
-                iid = str(row[0])
-                tags = ("bp_paused",) if self.paused_breakpoint_id == row[0] else ()
-                self.breakpoint_tree.insert("", tk.END, iid=iid, values=row, tags=tags)
+            for model in row_models:
+                row_id = model["id"]
+                iid = str(row_id)
+                tags = ()
+                if model["has_error"]:
+                    tags = ("bp_error",)
+                elif self.paused_breakpoint_id == row_id:
+                    tags = ("bp_paused",)
+                values = (model["id"], model["label"], model["pause"], model["hits"], model["edge"], model["condition"])
+                self.breakpoint_tree.insert("", tk.END, iid=iid, values=values, tags=tags)
 
             if selected_id and self.breakpoint_tree.exists(selected_id):
                 self.breakpoint_tree.selection_set(selected_id)
@@ -814,6 +836,23 @@ class Viewer(tk.Tk):
         except Exception:
             return repr(item)
 
+    def _collect_metrics_rows(self, resource):
+        metrics_obj = getattr(resource, "metrics", None)
+        if metrics_obj is None:
+            return []
+
+        names = [name for name in dir(metrics_obj) if not name.startswith("_")]
+        rows = []
+        for name in sorted(set(names)):
+            try:
+                value = getattr(metrics_obj, name)
+            except Exception:
+                continue
+            if callable(value):
+                continue
+            rows.append((str(name), str(value)))
+        return rows
+
     def _collect_resource_details(self, resource):
         class_name = resource.__class__.__name__
         visual_type = getattr(resource, "visual_type", class_name)
@@ -856,6 +895,8 @@ class Viewer(tk.Tk):
             "internal_queue_count": "N/A" if internal_queue_count is None else str(internal_queue_count),
             "store_items": store_items,
             "sim_time": f"{sim_time:.2f}",
+            "metrics_rows": self._collect_metrics_rows(resource),
+            "is_store": bool(class_name.endswith("Store")),
         }
 
     def _open_details_window(self, resource):
@@ -869,8 +910,18 @@ class Viewer(tk.Tk):
 
         details_win = tk.Toplevel(self)
         details_win.title("Resource Details")
-        details_win.geometry("620x460")
-        details_win.minsize(520, 360)
+        is_store_resource = resource.__class__.__name__.endswith("Store")
+        base_width = 620
+        base_height = 713
+        min_width = 520
+        min_height = 558
+
+        if not is_store_resource:
+            base_height = int(round(base_height * 0.8))
+            min_height = int(round(min_height * 0.8))
+
+        details_win.geometry(f"{base_width}x{base_height}")
+        details_win.minsize(min_width, min_height)
 
         root = ttk.Frame(details_win, padding=10)
         root.pack(fill=tk.BOTH, expand=True)
@@ -898,9 +949,35 @@ class Viewer(tk.Tk):
             value_labels[key] = value
 
         ttk.Separator(root, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(10, 8))
-        ttk.Label(root, text="Store Items (detailed view):").pack(anchor="w")
 
-        find_frame = ttk.Frame(root)
+        ttk.Label(root, text="Active Metrics:").pack(anchor="w")
+        metrics_frame = ttk.Frame(root)
+        metrics_frame.pack(fill=tk.BOTH, expand=False, pady=(4, 8))
+        metrics_scroll = ttk.Scrollbar(metrics_frame, orient=tk.VERTICAL)
+        metrics_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        metrics_tree = ttk.Treeview(
+            metrics_frame,
+            columns=("metric", "value"),
+            show="headings",
+            selectmode="none",
+            yscrollcommand=metrics_scroll.set,
+            height=6,
+        )
+        metrics_tree.heading("metric", text="Metric")
+        metrics_tree.heading("value", text="Value")
+        metrics_tree.column("metric", width=220, anchor="w", stretch=True)
+        metrics_tree.column("value", width=320, anchor="w", stretch=True)
+        metrics_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        metrics_scroll.config(command=metrics_tree.yview)
+
+        store_separator = ttk.Separator(root, orient=tk.HORIZONTAL)
+        store_separator.pack(fill=tk.X, pady=(10, 8))
+        store_section = ttk.Frame(root)
+        store_section.pack(fill=tk.BOTH, expand=True)
+        store_label = ttk.Label(store_section, text="Store Items (detailed view):")
+        store_label.pack(anchor="w")
+
+        find_frame = ttk.Frame(store_section)
         find_frame.pack(fill=tk.X, pady=(4, 4))
         ttk.Label(find_frame, text="Find:").pack(side=tk.LEFT, padx=(0, 4))
         details_find_var = tk.StringVar(value="")
@@ -913,7 +990,7 @@ class Viewer(tk.Tk):
         find_counter = ttk.Label(find_frame, text="0/0", width=6, anchor="e")
         find_counter.pack(side=tk.RIGHT)
 
-        items_frame = ttk.Frame(root)
+        items_frame = ttk.Frame(store_section)
         items_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
         items_scroll = ttk.Scrollbar(items_frame, orient=tk.VERTICAL)
         items_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -941,6 +1018,11 @@ class Viewer(tk.Tk):
             "window": details_win,
             "resource_ref": weakref.ref(resource),
             "value_labels": value_labels,
+            "metrics_tree": metrics_tree,
+            "metrics_frame": metrics_frame,
+            "last_metrics_rows": None,
+            "store_separator": store_separator,
+            "store_section": store_section,
             "items_text": items_text,
             "last_items_blob": None,
             "find_var": details_find_var,
@@ -1060,6 +1142,8 @@ class Viewer(tk.Tk):
         if resource is None:
             for label in entry["value_labels"].values():
                 label.config(text="Unavailable")
+            metrics_rows = []
+            show_store_section = False
             items_blob = "Resource no longer available."
         else:
             details = self._collect_resource_details(resource)
@@ -1072,6 +1156,8 @@ class Viewer(tk.Tk):
             entry["value_labels"]["put_queue_count"].config(text=details["put_queue_count"])
             entry["value_labels"]["get_queue_count"].config(text=details["get_queue_count"])
             entry["value_labels"]["internal_queue_count"].config(text=details["internal_queue_count"])
+            metrics_rows = list(details.get("metrics_rows", []))
+            show_store_section = bool(details.get("is_store", False))
 
             if details["store_items"] is None:
                 items_blob = "Detailed items are available for Store resources only."
@@ -1080,7 +1166,38 @@ class Viewer(tk.Tk):
             else:
                 items_blob = "\n".join(details["store_items"])
 
-        if items_blob != entry["last_items_blob"]:
+        if metrics_rows != entry["last_metrics_rows"]:
+            metrics_tree = entry["metrics_tree"]
+            metrics_tree.delete(*metrics_tree.get_children())
+            if metrics_rows:
+                for metric_name, metric_value in metrics_rows:
+                    metrics_tree.insert("", tk.END, values=(metric_name, metric_value))
+            else:
+                metrics_tree.insert("", tk.END, values=("-", "No active metrics"))
+            entry["last_metrics_rows"] = metrics_rows
+
+        metrics_frame = entry.get("metrics_frame")
+        store_separator = entry.get("store_separator")
+        store_section = entry.get("store_section")
+        if show_store_section:
+            if metrics_frame is not None:
+                metrics_frame.pack_configure(expand=False)
+            if store_separator is not None and not store_separator.winfo_ismapped():
+                store_separator.pack(fill=tk.X, pady=(10, 8), before=store_section)
+            if store_section is not None and not store_section.winfo_ismapped():
+                store_section.pack(fill=tk.BOTH, expand=True)
+        else:
+            if metrics_frame is not None:
+                metrics_frame.pack_configure(expand=True)
+            if store_separator is not None and store_separator.winfo_ismapped():
+                store_separator.pack_forget()
+            if store_section is not None and store_section.winfo_ismapped():
+                store_section.pack_forget()
+            entry["find_matches"] = []
+            entry["find_index"] = -1
+            entry["find_counter_label"].config(text="0/0")
+
+        if show_store_section and items_blob != entry["last_items_blob"]:
             items_text = entry["items_text"]
             items_text.config(state="normal")
             items_text.delete("1.0", tk.END)
@@ -1133,7 +1250,7 @@ class Viewer(tk.Tk):
                     try:
                         object_id = int(tag.split("_")[-1])
                         target_resource = None
-                        for resource in tracked_resources:
+                        for resource in self._tracked_resources():
                             if id(resource) == object_id:
                                 target_resource = resource
                                 break
@@ -1196,7 +1313,7 @@ class Viewer(tk.Tk):
         if resource is None:
             return True
 
-        resource_list = list(tracked_resources)
+        resource_list = list(self._tracked_resources())
         resource_list.sort(key=lambda item: getattr(item, "visual_name", str(id(item))))
         if resource not in resource_list:
             return True
@@ -1356,6 +1473,7 @@ class Viewer(tk.Tk):
         self.draw_scene()
 
     def center_view(self):
+        pending_transfers = self._pending_transfers()
         if pending_transfers:
             pending_transfers.clear()
         self.active_animations = []
@@ -1533,7 +1651,7 @@ class Viewer(tk.Tk):
         margin = 20 * self.scale
         margin_world = 20
         gc.collect()
-        resource_list = list(tracked_resources)
+        resource_list = list(self._tracked_resources())
         resource_list.sort(key=lambda resource: getattr(resource, "visual_name", str(id(resource))))
 
         total = len(resource_list)
@@ -1682,7 +1800,7 @@ class Viewer(tk.Tk):
 
         name = getattr(resource, "visual_name", "Resource")
         self.canvas.create_text(x + 10 * self.scale, y + 20 * self.scale, text=name, anchor="w", font=font_title)
-        self.canvas.create_text(x + 10 * self.scale, y + 40 * self.scale, text=f"{kind} (Cap: {capacity})", anchor="w", font=font_sub)
+        self.canvas.create_text(x + 10 * self.scale, y + 40 * self.scale, text=f"{kind}", anchor="w", font=font_sub)
 
         bar_x = x + 10 * self.scale
         bar_y = y + 60 * self.scale

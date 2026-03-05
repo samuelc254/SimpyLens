@@ -3,7 +3,7 @@
 simpyLens is a zero-invasion visualization and debugging toolkit for simpy models.
 It helps you inspect simulation behavior visually, without rewriting your business logic.
 
-![simpyLens running](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/basic_sim.gif)
+![simpyLens running](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/basic_sim.gif?v=20260302)
 
 ## What simpyLens does
 
@@ -67,32 +67,43 @@ def setup(env):
 
 
 if __name__ == "__main__":
-    manager = simpylens.Manager(setup_func=setup, title="My Simulation")
-    manager.viewer.mainloop()
+    lens = simpylens.Lens(model=setup, title="My Simulation")
+    lens.show()
 ```
 
 ## Public API
 
 Main exports:
-- `simpylens.Manager`
-- `simpylens.Viewer`
-- `simpylens.apply_patch`
+- `simpylens.Lens`
+- `simpylens.TrackingPatch`
+- `simpylens.MetricsPatch`
 
-Recommended entrypoint: `Manager`
+Metrics patch activation:
 
 ```python
-manager = simpylens.Manager(setup_func=setup, title="Demo", with_ui=True)
-manager.run()
-manager.pause()
-manager.step()
-manager.reset()
+import simpylens
+
+simpylens.MetricsPatch.apply()
 ```
 
-You can also instantiate `Viewer` directly if preferred:
+Public readonly metrics exposed after applying `MetricsPatch`:
+
+- Access pattern: `resource.metrics.<metric_name>`
+- `Resource`, `PriorityResource`, `PreemptiveResource`:
+`resource.metrics.queue_wait_time_min`, `resource.metrics.queue_wait_time_avg`, `resource.metrics.queue_wait_time_max`, `resource.metrics.usage_time_min`, `resource.metrics.usage_time_avg`, `resource.metrics.usage_time_max`, `resource.metrics.total_acquisitions`, `resource.metrics.idle_time_pct`, `resource.metrics.busy_time_pct`, `resource.metrics.concurrent_users_min`, `resource.metrics.concurrent_users_avg`, `resource.metrics.concurrent_users_max`
+- `Store`, `PriorityStore`, `FilterStore`:
+`resource.metrics.get_wait_time_min`, `resource.metrics.get_wait_time_avg`, `resource.metrics.get_wait_time_max`, `resource.metrics.put_wait_time_min`, `resource.metrics.put_wait_time_avg`, `resource.metrics.put_wait_time_max`, `resource.metrics.total_items_put`, `resource.metrics.total_items_got`, `resource.metrics.level_min`, `resource.metrics.level_avg`, `resource.metrics.level_max`
+- `Container`:
+`resource.metrics.get_wait_time_per_unit_min`, `resource.metrics.get_wait_time_per_unit_avg`, `resource.metrics.get_wait_time_per_unit_max`, `resource.metrics.put_wait_time_per_unit_min`, `resource.metrics.put_wait_time_per_unit_avg`, `resource.metrics.put_wait_time_per_unit_max`, `resource.metrics.total_amount_put`, `resource.metrics.total_amount_got`, `resource.metrics.level_min`, `resource.metrics.level_avg`, `resource.metrics.level_max`
+
+Recommended entrypoint: `Lens`
 
 ```python
-viewer = simpylens.Viewer(setup_func=setup, title="Demo")
-viewer.mainloop()
+lens = simpylens.Lens(model=setup, title="Demo", gui=True, metrics=True)
+lens.run()
+lens.pause()
+lens.step()
+lens.reset()
 ```
 
 ## Interface guide
@@ -136,7 +147,7 @@ Breakpoints can be created from Python and inspected/controlled in the UI.
 ### Add breakpoint
 
 ```python
-bp_id = manager.add_breakpoint(
+bp_id = lens.add_breakpoint(
     condition="shipping.level >= 10",
     label="Shipping reached 10",
     enabled=True,
@@ -155,12 +166,11 @@ If `label` is omitted/empty, it defaults to the condition text.
 
 Expression/callable context includes:
 - `env`: simpy environment.
-- `time`: current simulation time (`env.now`).
 - `resources`: dictionary of named tracked resources.
 - Named resources directly by variable name (when discoverable), for example `oven`, `machine`, etc.
 
 Available safe builtins in expression mode:
-- `abs`, `len`, `max`, `min`, `round`, `sum`
+- `abs`, `all`, `any`, `len`, `max`, `min`, `round`, `sum`
 
 ### Edge behavior
 
@@ -176,16 +186,16 @@ Available safe builtins in expression mode:
 You can change this at runtime:
 
 ```python
-manager.set_breakpoint_pause_on_hit(bp_id, False)
+lens.set_breakpoint_pause_on_hit(bp_id, False)
 ```
 
 ### Manage breakpoints
 
 ```python
-manager.set_breakpoint_enabled(bp_id, True)
-manager.remove_breakpoint(bp_id)
-manager.clear_breakpoints()
-all_bps = manager.list_breakpoints()
+lens.set_breakpoint_enabled(bp_id, True)
+lens.remove_breakpoint(bp_id)
+lens.clear_breakpoints()
+all_bps = lens.list_breakpoints()
 ```
 
 ### Breakpoint logs

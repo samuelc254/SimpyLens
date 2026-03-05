@@ -140,5 +140,5 @@ def setup(env):
 if __name__ == "__main__":
     import simpylens
 
-    sim_view = simpylens.Viewer(setup_func=setup)
-    sim_view.mainloop()
+    lens = simpylens.Lens(model=setup)
+    lens.show()

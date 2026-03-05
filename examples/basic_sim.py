@@ -70,6 +70,10 @@ def process_pot(env, pot, molding, glazing, oven, painting, clay_depot, shipping
     yield oven.put(pot)
     if len(oven.items) >= 5:
         print("[Oven] Starting batch firing with 5 items.")
+
+        for item in oven.items:
+            print(f"  - Item {item['id']} ({item['type']}) in batch.")
+
         yield env.timeout(10)
 
         if hasattr(oven, "finished_firing"):
@@ -110,8 +114,12 @@ def setup(env):
 
 
 if __name__ == "__main__":
-    manager = simpylens.Manager(setup_func=setup)
-    manager.add_breakpoint("len(oven.items) >= 5", label="Oven Batch Ready", edge="rising")
-    manager.add_breakpoint("shipping.level >= 10", edge="rising")
-    manager.add_breakpoint("env.now >= 50", edge="rising")
-    manager.viewer.mainloop()
+    lens = simpylens.Lens(model=setup)
+
+    lens.add_breakpoint("len(oven.items) >= 5", label="Oven Batch Ready", edge="rising")
+    lens.add_breakpoint("shipping.level >= 10", edge="rising")
+    lens.add_breakpoint("env.now >= 50", edge="rising")
+    lens.add_breakpoint("any(item['type'] == 'Mug' for item in oven.items)", label="Mug in Oven", edge="rising")
+    # lens.add_breakpoint("a==b")
+
+    lens.show()
