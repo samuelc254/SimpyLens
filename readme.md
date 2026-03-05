@@ -67,32 +67,25 @@ def setup(env):
 
 
 if __name__ == "__main__":
-    manager = simpylens.Manager(model=setup, title="My Simulation")
-    manager.viewer.mainloop()
+    lens = simpylens.Lens(model=setup, title="My Simulation")
+    lens.show()
 ```
 
 ## Public API
 
 Main exports:
-- `simpylens.Manager`
-- `simpylens.Viewer`
-- `simpylens.apply_patch`
+- `simpylens.Lens`
+- `simpylens.TrackingPatch`
+- `simpylens.MetricsPatch`
 
-Recommended entrypoint: `Manager`
-
-```python
-manager = simpylens.Manager(model=setup, title="Demo", with_ui=True)
-manager.run()
-manager.pause()
-manager.step()
-manager.reset()
-```
-
-You can also instantiate `Viewer` directly if preferred:
+Recommended entrypoint: `Lens`
 
 ```python
-viewer = simpylens.Viewer(model=setup, title="Demo")
-viewer.mainloop()
+lens = simpylens.Lens(model=setup, title="Demo", gui=True)
+lens.run()
+lens.pause()
+lens.step()
+lens.reset()
 ```
 
 ## Interface guide
@@ -136,7 +129,7 @@ Breakpoints can be created from Python and inspected/controlled in the UI.
 ### Add breakpoint
 
 ```python
-bp_id = manager.add_breakpoint(
+bp_id = lens.add_breakpoint(
     condition="shipping.level >= 10",
     label="Shipping reached 10",
     enabled=True,
@@ -155,12 +148,11 @@ If `label` is omitted/empty, it defaults to the condition text.
 
 Expression/callable context includes:
 - `env`: simpy environment.
-- `time`: current simulation time (`env.now`).
 - `resources`: dictionary of named tracked resources.
 - Named resources directly by variable name (when discoverable), for example `oven`, `machine`, etc.
 
 Available safe builtins in expression mode:
-- `abs`, `len`, `max`, `min`, `round`, `sum`
+- `abs`, `all`, `any`, `len`, `max`, `min`, `round`, `sum`
 
 ### Edge behavior
 
@@ -176,16 +168,16 @@ Available safe builtins in expression mode:
 You can change this at runtime:
 
 ```python
-manager.set_breakpoint_pause_on_hit(bp_id, False)
+lens.set_breakpoint_pause_on_hit(bp_id, False)
 ```
 
 ### Manage breakpoints
 
 ```python
-manager.set_breakpoint_enabled(bp_id, True)
-manager.remove_breakpoint(bp_id)
-manager.clear_breakpoints()
-all_bps = manager.list_breakpoints()
+lens.set_breakpoint_enabled(bp_id, True)
+lens.remove_breakpoint(bp_id)
+lens.clear_breakpoints()
+all_bps = lens.list_breakpoints()
 ```
 
 ### Breakpoint logs

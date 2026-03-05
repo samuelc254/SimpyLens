@@ -1,5 +1,6 @@
-from .monkey_patch import apply_patch
-from .gui import Viewer
-from .sim_manager import Manager
+from .breakpoint import Breakpoint
+from .metrics_patch import MetricsPatch
+from .sim_manager import Lens
+from .tracking_patch import TrackingPatch
 
-__all__ = ["apply_patch", "Viewer", "Manager"]
+__all__ = ["Lens", "Breakpoint", "TrackingPatch", "MetricsPatch"]

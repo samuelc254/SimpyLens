@@ -1,7 +1,7 @@
 import random
 
 import simpy
-from simpylens import Viewer
+from simpylens import Lens
 
 
 VERBOSE = False
@@ -173,5 +173,5 @@ def raw_hungry_drain(env, drain_id, raw_material):
 
 if __name__ == "__main__":
     random.seed(7)
-    viewer = Viewer(model=setup, title="Queue Stress (2x Resource/Store/Container)")
-    viewer.mainloop()
+    lens = Lens(model=setup, title="Queue Stress (2x Resource/Store/Container)")
+    lens.show()

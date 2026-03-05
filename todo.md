@@ -2,20 +2,26 @@
 
 ## Backlog funcional
 
-- corrigir as animações/gerenciamento das animações, elas não estão sendo corretamente identificadas
-- melhorar design dos "blocos" para representar melhor as filas, os pedidos e, para as stores, mostrar melhor os produtos
+- corrigir as animações/gerenciamento das animações, elas não estão sendo corretamente identificadas (passo futuro)
+- melhorar design dos "blocos" para representar melhor as filas, os pedidos e, para as stores, mostrar melhor os produtos (passo futuro)
 - adicionar modo headless para rodar a simulação sem interface gráfica, apenas com breakpoints programáticos e logs
 - adicionar controle da seed para quando a simulação for resetada, ela poder ser reproduzida exatamente igual
-- corrigir gif do readme para rodar em loop
-- adicionar testes unitários
-- adicionar rewind step (avaliar a viabilidade)
+- corrigir gif do readme para rodar em loop (passo futuro)
+- adicionar testes unitários (passo futuro)
+- adicionar rewind step (avaliar a viabilidade) (passo futuro)
 - remover alias de `time` para breakpoint
 - deixar tamanho do log salvo configurável e adicionar opção de salvar o log em um arquivo
-- refatorar `Viewer` para não ser mais público e deixar `Lens` como ponto de acesso principal
-- adicionar coleta de métricas
-- adicionar teste de alterar breakpoints com a simulação rodando
-- adicionar descrição dos atributos dos breakpoints (descrição da classe aqui nesse documento)
-- adicionar especificação de quais métricas estarão disponíveis (aqui nesse documento descrever o que o MetricsPatch vai coletar e quais serão expostas na API pública)
+- refatorar `Viewer` para não ser mais público e deixar `Lens` como ponto de acesso principal 
+- adicionar coleta de métricas (passo futuro)
+- adicionar especificação de quais métricas estarão disponíveis (aqui nesse documento descrever o que o MetricsPatch vai coletar e quais serão expostas na API pública) (passo futuro)
+- adicionar teste de alterar breakpoints com a simulação rodando (passo futuro)
+- o tracking patch deve adicionar ao simpy.Enviroment os itens:
+    - tracked_resources = weakref.WeakSet()
+    - pending_transfers = []
+    - step_logs = []
+    - process_locations = weakref.WeakKeyDictionary()
+
+
 
 ---
 
@@ -70,7 +76,7 @@ Métodos oficiais:
 - `set_log_capacity(capacity)` (capacidade máxima do log; padrão 1000)
 
 Objetos de breakpoint:
-- `Lens.Breakpoint` (classe interna ou objeto compatível para `add_breakpoint()`)
+- `simpylens.Breakpoint` (classe ou objeto compatível para `add_breakpoint()`)
 - atributos públicos:
     - `id` (único, gerado automaticamente, imutável)
     - `condition` (string, ex: `"env.now > 10 and len(env.queue) > 0"`)
@@ -129,7 +135,7 @@ Contrato mínimo:
 ### 4) Patch de métricas (independente)
 
 Classe pública proposta:
-- `MetricsPatch.apply()`
+- `simpylens.MetricsPatch.apply()`
 
 Escopo:
 - coleta de métricas (contadores, tempos, throughput, etc)

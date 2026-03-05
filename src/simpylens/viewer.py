@@ -1,4 +1,3 @@
-from .monkey_patch import tracked_resources, pending_transfers, apply_patch
 from .sim_manager import SimulationController
 import json
 import time
@@ -19,7 +18,6 @@ class Viewer(tk.Tk):
                       and sets up the simulation (creates resources, processes, etc).
         :param title: Window title.
         """
-        apply_patch()
         super().__init__()
         self._app_icon_image = None
         self._set_app_icon()
@@ -115,6 +113,18 @@ class Viewer(tk.Tk):
             except Exception as exc:
                 messagebox.showerror("Simulation Error", f"Error in setup():\n{exc}")
 
+    def _tracked_resources(self):
+        env = self.sim_ctrl.env if hasattr(self, "sim_ctrl") and self.sim_ctrl else None
+        if env is None:
+            return ()
+        return getattr(env, "tracked_resources", ())
+
+    def _pending_transfers(self):
+        env = self.sim_ctrl.env if hasattr(self, "sim_ctrl") and self.sim_ctrl else None
+        if env is None:
+            return []
+        return getattr(env, "pending_transfers", [])
+
     def _set_app_icon(self):
         icon_path = Path(__file__).resolve().parents[0] / "assets" / "icon.png"
         if not icon_path.exists():
@@ -153,7 +163,7 @@ class Viewer(tk.Tk):
 
     def _save_manual_layout_cache(self):
         positions = {name: [float(coords[0]), float(coords[1])] for name, coords in self.manual_layout_by_name.items() if coords and len(coords) == 2}
-        for resource in list(tracked_resources):
+        for resource in list(self._tracked_resources()):
             if resource not in self.manual_block_positions:
                 continue
             coords = self.manual_block_positions.get(resource)
@@ -412,6 +422,7 @@ class Viewer(tk.Tk):
         self.breakpoint_tree.column("edge", width=62, anchor="center", stretch=False)
         self.breakpoint_tree.column("condition", width=280, anchor="w", stretch=True)
         self.breakpoint_tree.tag_configure("bp_paused", background="#d9f7d9")
+        self.breakpoint_tree.tag_configure("bp_error", background="#ffd9d9")
         self.breakpoint_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.breakpoint_tree.bind("<Button-1>", self._on_breakpoint_tree_click)
         bp_scroll.config(command=self.breakpoint_tree.yview)
@@ -502,12 +513,12 @@ class Viewer(tk.Tk):
         except ValueError:
             return
 
-        bp_map = {bp["id"]: bp for bp in self.sim_ctrl.list_breakpoints()}
+        bp_map = {getattr(bp, "id", None): bp for bp in self.sim_ctrl.list_breakpoints()}
         bp = bp_map.get(breakpoint_id)
         if bp is None:
             return "break"
 
-        new_value = not bool(bp.get("pause_on_hit", True))
+        new_value = not bool(getattr(bp, "pause_on_hit", True))
         self.sim_ctrl.set_breakpoint_pause_on_hit(breakpoint_id, new_value)
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.breakpoint_tree.selection_set(row_id)
@@ -521,27 +532,37 @@ class Viewer(tk.Tk):
         self._breakpoint_refresh_job = None
 
         breakpoints = self.sim_ctrl.list_breakpoints() if hasattr(self, "sim_ctrl") and self.sim_ctrl else []
-        rows = [
-            (
-                bp["id"],
-                str(bp.get("label", "")),
-                "☑" if bp.get("pause_on_hit", True) else "☐",
-                str(bp.get("hit_count", 0)),
-                str(bp.get("edge", "none")),
-                str(bp.get("expression", "")),
+        row_models = []
+        for bp in breakpoints:
+            row_models.append(
+                {
+                    "id": getattr(bp, "id", 0),
+                    "label": str(getattr(bp, "label", "")),
+                    "pause": "☑" if getattr(bp, "pause_on_hit", True) else "☐",
+                    "hits": str(getattr(bp, "hit_count", 0)),
+                    "edge": str(getattr(bp, "edge", "none")),
+                    "condition": str(getattr(bp, "expression", "")),
+                    "has_error": bool(getattr(bp, "last_error", None)),
+                }
             )
-            for bp in breakpoints
-        ]
+
+        rows = [(model["id"], model["label"], model["pause"], model["hits"], model["edge"], model["condition"], model["has_error"]) for model in row_models]
 
         if force or rows != self.breakpoint_row_cache:
             selected = self.breakpoint_tree.selection()
             selected_id = selected[0] if selected else None
 
             self.breakpoint_tree.delete(*self.breakpoint_tree.get_children())
-            for row in rows:
-                iid = str(row[0])
-                tags = ("bp_paused",) if self.paused_breakpoint_id == row[0] else ()
-                self.breakpoint_tree.insert("", tk.END, iid=iid, values=row, tags=tags)
+            for model in row_models:
+                row_id = model["id"]
+                iid = str(row_id)
+                tags = ()
+                if model["has_error"]:
+                    tags = ("bp_error",)
+                elif self.paused_breakpoint_id == row_id:
+                    tags = ("bp_paused",)
+                values = (model["id"], model["label"], model["pause"], model["hits"], model["edge"], model["condition"])
+                self.breakpoint_tree.insert("", tk.END, iid=iid, values=values, tags=tags)
 
             if selected_id and self.breakpoint_tree.exists(selected_id):
                 self.breakpoint_tree.selection_set(selected_id)
@@ -1134,7 +1155,7 @@ class Viewer(tk.Tk):
                     try:
                         object_id = int(tag.split("_")[-1])
                         target_resource = None
-                        for resource in tracked_resources:
+                        for resource in self._tracked_resources():
                             if id(resource) == object_id:
                                 target_resource = resource
                                 break
@@ -1197,7 +1218,7 @@ class Viewer(tk.Tk):
         if resource is None:
             return True
 
-        resource_list = list(tracked_resources)
+        resource_list = list(self._tracked_resources())
         resource_list.sort(key=lambda item: getattr(item, "visual_name", str(id(item))))
         if resource not in resource_list:
             return True
@@ -1357,6 +1378,7 @@ class Viewer(tk.Tk):
         self.draw_scene()
 
     def center_view(self):
+        pending_transfers = self._pending_transfers()
         if pending_transfers:
             pending_transfers.clear()
         self.active_animations = []
@@ -1534,7 +1556,7 @@ class Viewer(tk.Tk):
         margin = 20 * self.scale
         margin_world = 20
         gc.collect()
-        resource_list = list(tracked_resources)
+        resource_list = list(self._tracked_resources())
         resource_list.sort(key=lambda resource: getattr(resource, "visual_name", str(id(resource))))
 
         total = len(resource_list)

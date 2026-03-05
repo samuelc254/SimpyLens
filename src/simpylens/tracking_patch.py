@@ -7,14 +7,34 @@ import weakref
 
 import simpy
 
+TRACKED_RESOURCES_ATTR = "tracked_resources"
+PENDING_TRANSFERS_ATTR = "pending_transfers"
+STEP_LOGS_ATTR = "step_logs"
+PROCESS_LOCATIONS_ATTR = "process_locations"
 
-tracked_resources = weakref.WeakSet()
-pending_transfers = []
-step_logs = []
-process_locations = weakref.WeakKeyDictionary()
+
+def _ensure_tracking_state(env):
+    if env is None:
+        return None
+
+    if not hasattr(env, TRACKED_RESOURCES_ATTR):
+        setattr(env, TRACKED_RESOURCES_ATTR, weakref.WeakSet())
+    if not hasattr(env, PENDING_TRANSFERS_ATTR):
+        setattr(env, PENDING_TRANSFERS_ATTR, [])
+    if not hasattr(env, STEP_LOGS_ATTR):
+        setattr(env, STEP_LOGS_ATTR, [])
+    if not hasattr(env, PROCESS_LOCATIONS_ATTR):
+        setattr(env, PROCESS_LOCATIONS_ATTR, weakref.WeakKeyDictionary())
+
+    return env
 
 
-def _resolve_process_resource(process):
+def _resolve_process_resource(env, process):
+    state = _ensure_tracking_state(env)
+    if state is None:
+        return None
+
+    process_locations = getattr(state, PROCESS_LOCATIONS_ATTR)
     ref_obj = process_locations.get(process)
     if ref_obj is None:
         return None
@@ -213,14 +233,21 @@ def _extract_call_target_from_frame_source(frame):
 
 
 def register_interaction(env, resource_instance, action, detail=None):
-    """Registers process-resource interaction for logs and transfer animations."""
     if not env or not hasattr(env, "active_process") or env.active_process is None:
         return
+
+    state = _ensure_tracking_state(env)
+    if state is None:
+        return
+
+    process_locations = getattr(state, PROCESS_LOCATIONS_ATTR)
+    step_logs = getattr(state, STEP_LOGS_ATTR)
+    pending_transfers = getattr(state, PENDING_TRANSFERS_ATTR)
 
     process = env.active_process
     process_name = _process_label(process)
     current_name = getattr(resource_instance, "visual_name", str(resource_instance))
-    previous_resource = _resolve_process_resource(process)
+    previous_resource = _resolve_process_resource(env, process)
     action_name = str(action).lower()
 
     if previous_resource is None:
@@ -270,7 +297,6 @@ def register_interaction(env, resource_instance, action, detail=None):
 
 
 def try_discover_name(instance):
-    """Tries to discover the variable name receiving this instance."""
     frame = None
     try:
         frame = inspect.currentframe()
@@ -317,7 +343,8 @@ class TrackedResource(OriginalResource):
         super().__init__(*args, **kwargs)
         self.visual_name = try_discover_name(self) or f"Resource_{id(self)}"
         self.visual_type = "RESOURCE"
-        tracked_resources.add(self)
+        _ensure_tracking_state(self._env)
+        self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
         detail = {}
@@ -345,7 +372,8 @@ class TrackedPriorityResource(OriginalPriorityResource):
         super().__init__(*args, **kwargs)
         self.visual_name = try_discover_name(self) or f"PriorityResource_{id(self)}"
         self.visual_type = "PRIORITY_RESOURCE"
-        tracked_resources.add(self)
+        _ensure_tracking_state(self._env)
+        self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
         detail = {}
@@ -373,7 +401,8 @@ class TrackedPreemptiveResource(OriginalPreemptiveResource):
         super().__init__(*args, **kwargs)
         self.visual_name = try_discover_name(self) or f"PreemptiveResource_{id(self)}"
         self.visual_type = "PREEMPTIVE_RESOURCE"
-        tracked_resources.add(self)
+        _ensure_tracking_state(self._env)
+        self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
         detail = {}
@@ -401,7 +430,8 @@ class TrackedContainer(OriginalContainer):
         super().__init__(*args, **kwargs)
         self.visual_name = try_discover_name(self) or f"Container_{id(self)}"
         self.visual_type = "CONTAINER"
-        tracked_resources.add(self)
+        _ensure_tracking_state(self._env)
+        self._env.tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
         detail = {}
@@ -434,7 +464,8 @@ class TrackedStore(OriginalStore):
         self.visual_name = try_discover_name(self) or f"Store_{id(self)}"
         self.visual_type = "STORE"
         self.is_expanded = False
-        tracked_resources.add(self)
+        _ensure_tracking_state(self._env)
+        self._env.tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
         detail = {}
@@ -465,7 +496,8 @@ class TrackedPriorityStore(OriginalPriorityStore):
         self.visual_name = try_discover_name(self) or f"PriorityStore_{id(self)}"
         self.visual_type = "PRIORITY_STORE"
         self.is_expanded = False
-        tracked_resources.add(self)
+        _ensure_tracking_state(self._env)
+        self._env.tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
         detail = {}
@@ -496,7 +528,8 @@ class TrackedFilterStore(OriginalFilterStore):
         self.visual_name = try_discover_name(self) or f"FilterStore_{id(self)}"
         self.visual_type = "FILTER_STORE"
         self.is_expanded = False
-        tracked_resources.add(self)
+        _ensure_tracking_state(self._env)
+        self._env.tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
         detail = {}
@@ -524,10 +557,17 @@ class TrackedFilterStore(OriginalFilterStore):
 
 
 class TrackedEnvironment(simpy.Environment):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _ensure_tracking_state(self)
+
     def step(self):
         if not hasattr(self, "_step_count"):
             self._step_count = 0
         self._step_count += 1
+
+        _ensure_tracking_state(self)
+        step_logs = self.step_logs
 
         details = {}
         triggering_processes = []
@@ -618,8 +658,7 @@ class TrackedEnvironment(simpy.Environment):
             )
 
 
-def apply_patch():
-    """Applies Monkey Patch to SimPy classes."""
+def _apply_tracking_patch():
     simpy.Resource = TrackedResource
     simpy.PriorityResource = TrackedPriorityResource
     simpy.PreemptiveResource = TrackedPreemptiveResource
@@ -628,3 +667,14 @@ def apply_patch():
     simpy.PriorityStore = TrackedPriorityStore
     simpy.FilterStore = TrackedFilterStore
     simpy.Environment = TrackedEnvironment
+
+
+class TrackingPatch:
+    _applied = False
+
+    @classmethod
+    def apply(cls):
+        if cls._applied:
+            return
+        _apply_tracking_patch()
+        cls._applied = True
