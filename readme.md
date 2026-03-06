@@ -208,16 +208,14 @@ The logger emits status events such as:
 
 Examples are available in `examples/`:
 
-- `basic_sim.py`
-- `medium_sim.py`
-- `complex_sim.py`
-- `cnc_sim.py`
-- `queue_stress_sim.py`
+- `gas_station_refueling.py`
+- `pottery_factory.py`
+- `wafer_fabrication.py`
 
 From project root:
 
 ```bash
-python examples/basic_sim.py
+python examples/pottery_factory.py
 ```
 
 ## Limitations and notes
