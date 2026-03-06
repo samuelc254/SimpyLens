@@ -116,6 +116,9 @@ class _ResourceMetricsMixin:
         "queue_wait_time_min",
         "queue_wait_time_avg",
         "queue_wait_time_max",
+        "request_queue_min",
+        "request_queue_avg",
+        "request_queue_max",
         "usage_time_min",
         "usage_time_avg",
         "usage_time_max",
@@ -140,6 +143,7 @@ class _ResourceMetricsMixin:
 
         self._metrics_concurrent = _TimeWeightedStats(now, current_users)
         self._metrics_busy = _TimeWeightedStats(now, 1.0 if current_users > 0 else 0.0)
+        self._metrics_request_queue = _TimeWeightedStats(now, float(len(getattr(self, "queue", []))))
 
         self._metrics_request_started_at = weakref.WeakKeyDictionary()
         self._metrics_active_since = weakref.WeakKeyDictionary()
@@ -147,6 +151,7 @@ class _ResourceMetricsMixin:
     def request(self, *args, **kwargs):
         request_event = super().request(*args, **kwargs)
         self._metrics_request_started_at[request_event] = float(self._env.now)
+        self._metrics_request_queue.observe(float(self._env.now), float(len(getattr(self, "queue", []))))
 
         def _on_request_granted(event):
             now = float(self._env.now)
@@ -162,6 +167,7 @@ class _ResourceMetricsMixin:
             current_users = int(getattr(self, "count", 0))
             self._metrics_concurrent.observe(now, current_users)
             self._metrics_busy.observe(now, 1.0 if current_users > 0 else 0.0)
+            self._metrics_request_queue.observe(now, float(len(getattr(self, "queue", []))))
 
         return _attach_event_callback(request_event, _on_request_granted)
 
@@ -181,6 +187,7 @@ class _ResourceMetricsMixin:
             current_users = int(getattr(self, "count", 0))
             self._metrics_concurrent.observe(now, current_users)
             self._metrics_busy.observe(now, 1.0 if current_users > 0 else 0.0)
+            self._metrics_request_queue.observe(now, float(len(getattr(self, "queue", []))))
 
         return _attach_event_callback(release_event, _on_release_done)
 
@@ -195,6 +202,18 @@ class _ResourceMetricsMixin:
     @property
     def queue_wait_time_max(self):
         return self._metrics_queue_wait.max
+
+    @property
+    def request_queue_min(self):
+        return self._metrics_request_queue.minimum_value()
+
+    @property
+    def request_queue_avg(self):
+        return self._metrics_request_queue.average(float(self._env.now))
+
+    @property
+    def request_queue_max(self):
+        return self._metrics_request_queue.maximum_value()
 
     @property
     def usage_time_min(self):
@@ -248,9 +267,15 @@ class _StoreMetricsMixin:
         "get_wait_time_min",
         "get_wait_time_avg",
         "get_wait_time_max",
+        "get_queue_min",
+        "get_queue_avg",
+        "get_queue_max",
         "put_wait_time_min",
         "put_wait_time_avg",
         "put_wait_time_max",
+        "put_queue_min",
+        "put_queue_avg",
+        "put_queue_max",
         "total_items_put",
         "total_items_got",
         "level_min",
@@ -266,28 +291,38 @@ class _StoreMetricsMixin:
         self._metrics_total_items_put = 0
         self._metrics_total_items_got = 0
         self._metrics_level = _TimeWeightedStats(now, float(len(getattr(self, "items", []))))
+        self._metrics_get_queue = _TimeWeightedStats(now, float(len(getattr(self, "get_queue", []))))
+        self._metrics_put_queue = _TimeWeightedStats(now, float(len(getattr(self, "put_queue", []))))
 
     def put(self, *args, **kwargs):
         put_event = super().put(*args, **kwargs)
         started_at = float(self._env.now)
+        self._metrics_put_queue.observe(started_at, float(len(getattr(self, "put_queue", []))))
+        self._metrics_get_queue.observe(started_at, float(len(getattr(self, "get_queue", []))))
 
         def _on_put_done(_event):
             now = float(self._env.now)
             self._metrics_put_wait.add(now - started_at)
             self._metrics_total_items_put += 1
             self._metrics_level.observe(now, float(len(getattr(self, "items", []))))
+            self._metrics_put_queue.observe(now, float(len(getattr(self, "put_queue", []))))
+            self._metrics_get_queue.observe(now, float(len(getattr(self, "get_queue", []))))
 
         return _attach_event_callback(put_event, _on_put_done)
 
     def get(self, *args, **kwargs):
         get_event = super().get(*args, **kwargs)
         started_at = float(self._env.now)
+        self._metrics_put_queue.observe(started_at, float(len(getattr(self, "put_queue", []))))
+        self._metrics_get_queue.observe(started_at, float(len(getattr(self, "get_queue", []))))
 
         def _on_get_done(_event):
             now = float(self._env.now)
             self._metrics_get_wait.add(now - started_at)
             self._metrics_total_items_got += 1
             self._metrics_level.observe(now, float(len(getattr(self, "items", []))))
+            self._metrics_put_queue.observe(now, float(len(getattr(self, "put_queue", []))))
+            self._metrics_get_queue.observe(now, float(len(getattr(self, "get_queue", []))))
 
         return _attach_event_callback(get_event, _on_get_done)
 
@@ -304,6 +339,18 @@ class _StoreMetricsMixin:
         return self._metrics_get_wait.max
 
     @property
+    def get_queue_min(self):
+        return self._metrics_get_queue.minimum_value()
+
+    @property
+    def get_queue_avg(self):
+        return self._metrics_get_queue.average(float(self._env.now))
+
+    @property
+    def get_queue_max(self):
+        return self._metrics_get_queue.maximum_value()
+
+    @property
     def put_wait_time_min(self):
         return self._metrics_put_wait.min
 
@@ -314,6 +361,18 @@ class _StoreMetricsMixin:
     @property
     def put_wait_time_max(self):
         return self._metrics_put_wait.max
+
+    @property
+    def put_queue_min(self):
+        return self._metrics_put_queue.minimum_value()
+
+    @property
+    def put_queue_avg(self):
+        return self._metrics_put_queue.average(float(self._env.now))
+
+    @property
+    def put_queue_max(self):
+        return self._metrics_put_queue.maximum_value()
 
     @property
     def total_items_put(self):
@@ -345,9 +404,15 @@ class _ContainerMetricsMixin:
         "get_wait_time_per_unit_min",
         "get_wait_time_per_unit_avg",
         "get_wait_time_per_unit_max",
+        "get_queue_min",
+        "get_queue_avg",
+        "get_queue_max",
         "put_wait_time_per_unit_min",
         "put_wait_time_per_unit_avg",
         "put_wait_time_per_unit_max",
+        "put_queue_min",
+        "put_queue_avg",
+        "put_queue_max",
         "total_amount_put",
         "total_amount_got",
         "level_min",
@@ -363,11 +428,15 @@ class _ContainerMetricsMixin:
         self._metrics_total_amount_put = 0.0
         self._metrics_total_amount_got = 0.0
         self._metrics_level = _TimeWeightedStats(now, float(getattr(self, "level", 0.0)))
+        self._metrics_get_queue = _TimeWeightedStats(now, float(len(getattr(self, "get_queue", []))))
+        self._metrics_put_queue = _TimeWeightedStats(now, float(len(getattr(self, "put_queue", []))))
 
     def put(self, *args, **kwargs):
         amount = _read_amount(args, kwargs)
         put_event = super().put(*args, **kwargs)
         started_at = float(self._env.now)
+        self._metrics_put_queue.observe(started_at, float(len(getattr(self, "put_queue", []))))
+        self._metrics_get_queue.observe(started_at, float(len(getattr(self, "get_queue", []))))
 
         def _on_put_done(_event):
             now = float(self._env.now)
@@ -376,6 +445,8 @@ class _ContainerMetricsMixin:
             self._metrics_put_wait_per_unit.add(per_unit)
             self._metrics_total_amount_put += amount
             self._metrics_level.observe(now, float(getattr(self, "level", 0.0)))
+            self._metrics_put_queue.observe(now, float(len(getattr(self, "put_queue", []))))
+            self._metrics_get_queue.observe(now, float(len(getattr(self, "get_queue", []))))
 
         return _attach_event_callback(put_event, _on_put_done)
 
@@ -383,6 +454,8 @@ class _ContainerMetricsMixin:
         amount = _read_amount(args, kwargs)
         get_event = super().get(*args, **kwargs)
         started_at = float(self._env.now)
+        self._metrics_put_queue.observe(started_at, float(len(getattr(self, "put_queue", []))))
+        self._metrics_get_queue.observe(started_at, float(len(getattr(self, "get_queue", []))))
 
         def _on_get_done(_event):
             now = float(self._env.now)
@@ -391,6 +464,8 @@ class _ContainerMetricsMixin:
             self._metrics_get_wait_per_unit.add(per_unit)
             self._metrics_total_amount_got += amount
             self._metrics_level.observe(now, float(getattr(self, "level", 0.0)))
+            self._metrics_put_queue.observe(now, float(len(getattr(self, "put_queue", []))))
+            self._metrics_get_queue.observe(now, float(len(getattr(self, "get_queue", []))))
 
         return _attach_event_callback(get_event, _on_get_done)
 
@@ -407,6 +482,18 @@ class _ContainerMetricsMixin:
         return self._metrics_get_wait_per_unit.max
 
     @property
+    def get_queue_min(self):
+        return self._metrics_get_queue.minimum_value()
+
+    @property
+    def get_queue_avg(self):
+        return self._metrics_get_queue.average(float(self._env.now))
+
+    @property
+    def get_queue_max(self):
+        return self._metrics_get_queue.maximum_value()
+
+    @property
     def put_wait_time_per_unit_min(self):
         return self._metrics_put_wait_per_unit.min
 
@@ -417,6 +504,18 @@ class _ContainerMetricsMixin:
     @property
     def put_wait_time_per_unit_max(self):
         return self._metrics_put_wait_per_unit.max
+
+    @property
+    def put_queue_min(self):
+        return self._metrics_put_queue.minimum_value()
+
+    @property
+    def put_queue_avg(self):
+        return self._metrics_put_queue.average(float(self._env.now))
+
+    @property
+    def put_queue_max(self):
+        return self._metrics_put_queue.maximum_value()
 
     @property
     def total_amount_put(self):
@@ -443,6 +542,68 @@ class _ContainerMetricsMixin:
         return _MetricsAccessor(self, self._metrics_names)
 
 
+OriginalResource = simpy.Resource
+OriginalPriorityResource = simpy.PriorityResource
+OriginalPreemptiveResource = simpy.PreemptiveResource
+OriginalContainer = simpy.Container
+OriginalStore = simpy.Store
+OriginalPriorityStore = simpy.PriorityStore
+OriginalFilterStore = simpy.FilterStore
+
+
+class MetricsResource(_ResourceMetricsMixin, OriginalResource):
+    pass
+
+
+class MetricsPriorityResource(_ResourceMetricsMixin, OriginalPriorityResource):
+    pass
+
+
+class MetricsPreemptiveResource(_ResourceMetricsMixin, OriginalPreemptiveResource):
+    pass
+
+
+class MetricsStore(_StoreMetricsMixin, OriginalStore):
+    pass
+
+
+class MetricsPriorityStore(_StoreMetricsMixin, OriginalPriorityStore):
+    pass
+
+
+class MetricsFilterStore(_StoreMetricsMixin, OriginalFilterStore):
+    pass
+
+
+class MetricsContainer(_ContainerMetricsMixin, OriginalContainer):
+    pass
+
+
+def _apply_metrics_patch():
+    def _compose(patch_cls, current_cls):
+        # Already includes metrics behavior.
+        if issubclass(current_cls, patch_cls):
+            return current_cls
+
+        # Patch class already extends the current base.
+        if issubclass(patch_cls, current_cls):
+            return patch_cls
+
+        class _Composed(patch_cls, current_cls):
+            pass
+
+        _Composed.__name__ = f"{patch_cls.__name__}With{current_cls.__name__}"
+        return _Composed
+
+    simpy.Resource = _compose(MetricsResource, simpy.Resource)
+    simpy.PriorityResource = _compose(MetricsPriorityResource, simpy.PriorityResource)
+    simpy.PreemptiveResource = _compose(MetricsPreemptiveResource, simpy.PreemptiveResource)
+    simpy.Store = _compose(MetricsStore, simpy.Store)
+    simpy.PriorityStore = _compose(MetricsPriorityStore, simpy.PriorityStore)
+    simpy.FilterStore = _compose(MetricsFilterStore, simpy.FilterStore)
+    simpy.Container = _compose(MetricsContainer, simpy.Container)
+
+
 class MetricsPatch:
     _applied = False
 
@@ -450,42 +611,5 @@ class MetricsPatch:
     def apply(cls):
         if cls._applied:
             return
-
-        ResourceBase = simpy.Resource
-        PriorityResourceBase = simpy.PriorityResource
-        PreemptiveResourceBase = simpy.PreemptiveResource
-        StoreBase = simpy.Store
-        PriorityStoreBase = simpy.PriorityStore
-        FilterStoreBase = simpy.FilterStore
-        ContainerBase = simpy.Container
-
-        class MetricsResource(_ResourceMetricsMixin, ResourceBase):
-            pass
-
-        class MetricsPriorityResource(_ResourceMetricsMixin, PriorityResourceBase):
-            pass
-
-        class MetricsPreemptiveResource(_ResourceMetricsMixin, PreemptiveResourceBase):
-            pass
-
-        class MetricsStore(_StoreMetricsMixin, StoreBase):
-            pass
-
-        class MetricsPriorityStore(_StoreMetricsMixin, PriorityStoreBase):
-            pass
-
-        class MetricsFilterStore(_StoreMetricsMixin, FilterStoreBase):
-            pass
-
-        class MetricsContainer(_ContainerMetricsMixin, ContainerBase):
-            pass
-
-        simpy.Resource = MetricsResource
-        simpy.PriorityResource = MetricsPriorityResource
-        simpy.PreemptiveResource = MetricsPreemptiveResource
-        simpy.Store = MetricsStore
-        simpy.PriorityStore = MetricsPriorityStore
-        simpy.FilterStore = MetricsFilterStore
-        simpy.Container = MetricsContainer
-
+        _apply_metrics_patch()
         cls._applied = True

@@ -11,6 +11,8 @@ TRACKED_RESOURCES_ATTR = "tracked_resources"
 PENDING_TRANSFERS_ATTR = "pending_transfers"
 STEP_LOGS_ATTR = "step_logs"
 PROCESS_LOCATIONS_ATTR = "process_locations"
+LAST_EVENT_NAME_ATTR = "last_event_name"
+LAST_PROCESS_NAME_ATTR = "last_process_name"
 
 
 def _ensure_tracking_state(env):
@@ -25,6 +27,10 @@ def _ensure_tracking_state(env):
         setattr(env, STEP_LOGS_ATTR, [])
     if not hasattr(env, PROCESS_LOCATIONS_ATTR):
         setattr(env, PROCESS_LOCATIONS_ATTR, weakref.WeakKeyDictionary())
+    if not hasattr(env, LAST_EVENT_NAME_ATTR):
+        setattr(env, LAST_EVENT_NAME_ATTR, None)
+    if not hasattr(env, LAST_PROCESS_NAME_ATTR):
+        setattr(env, LAST_PROCESS_NAME_ATTR, None)
 
     return env
 
@@ -246,6 +252,7 @@ def register_interaction(env, resource_instance, action, detail=None):
 
     process = env.active_process
     process_name = _process_label(process)
+    setattr(state, LAST_PROCESS_NAME_ATTR, process_name)
     current_name = getattr(resource_instance, "visual_name", str(resource_instance))
     previous_resource = _resolve_process_resource(env, process)
     action_name = str(action).lower()
@@ -284,10 +291,24 @@ def register_interaction(env, resource_instance, action, detail=None):
 
     if previous_resource is not None:
         if previous_resource != resource_instance:
+            transfer_from = previous_resource
+            transfer_to = resource_instance
+
+            # A get operation moves data/item from the resource back to where the
+            # process previously was represented, so invert the animation direction.
+            is_get = action_name == "get"
+            is_store_or_container = bool(
+                getattr(resource_instance, "visual_type", "") in {"STORE", "PRIORITY_STORE", "FILTER_STORE", "CONTAINER"}
+                or resource_instance.__class__.__name__.endswith("Store")
+                or resource_instance.__class__.__name__.endswith("Container")
+            )
+            if is_get and is_store_or_container:
+                transfer_from, transfer_to = resource_instance, previous_resource
+
             pending_transfers.append(
                 {
-                    "from": previous_resource,
-                    "to": resource_instance,
+                    "from": transfer_from,
+                    "to": transfer_to,
                     "item": process_name,
                     "action": action_name,
                 }
@@ -580,6 +601,7 @@ class TrackedEnvironment(simpy.Environment):
 
                 event_name = type(event).__name__
                 details["event"] = event_name
+                self.last_event_name = event_name
 
                 if event_name == "Timeout":
                     details["delay"] = event.value
@@ -612,6 +634,7 @@ class TrackedEnvironment(simpy.Environment):
                 details["inspect_error"] = str(exc)
         else:
             details["event"] = "EMPTY_QUEUE"
+            self.last_event_name = "EMPTY_QUEUE"
 
         step_logs.append(
             _format_payload(
@@ -641,6 +664,7 @@ class TrackedEnvironment(simpy.Environment):
 
         effective_after_process = active_process_name or "-"
         effective_before_process = before_expected_process or "-"
+        self.last_process_name = None if effective_after_process == "-" else effective_after_process
 
         should_log_after = effective_after_process != effective_before_process
 
@@ -659,19 +683,19 @@ class TrackedEnvironment(simpy.Environment):
 
 
 def _apply_tracking_patch():
-    def _compose(tracked_cls, current_cls):
+    def _compose(patch_cls, current_cls):
         # Already includes tracking behavior.
-        if issubclass(current_cls, tracked_cls):
+        if issubclass(current_cls, patch_cls):
             return current_cls
 
-        # Tracking class already extends the current base.
-        if issubclass(tracked_cls, current_cls):
-            return tracked_cls
+        # Patch class already extends the current base.
+        if issubclass(patch_cls, current_cls):
+            return patch_cls
 
-        class _Composed(tracked_cls, current_cls):
+        class _Composed(patch_cls, current_cls):
             pass
 
-        _Composed.__name__ = f"{tracked_cls.__name__}With{current_cls.__name__}"
+        _Composed.__name__ = f"{patch_cls.__name__}With{current_cls.__name__}"
         return _Composed
 
     simpy.Resource = _compose(TrackedResource, simpy.Resource)

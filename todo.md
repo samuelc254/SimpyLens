@@ -9,7 +9,6 @@
 - deixar tamanho do log salvo configurável e adicionar opção de salvar o log em um arquivo
 - adicionar teste de alterar breakpoints com a simulação rodando (passo futuro)
 - adicionar mais metricas de fila, media de itens na fila, min e max (fila de put get e fila de request)
-- verificar pq o patch de tracking tem original resoucer salvo como classe e o patch de metricas não
 
 
 ---
