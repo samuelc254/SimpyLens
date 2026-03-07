@@ -2,13 +2,12 @@
 
 ## Backlog funcional
 
-- adicionar modo headless para rodar a simulação sem interface gráfica, apenas com breakpoints programáticos e logs
-- corrigir gif do readme para rodar em loop (passo futuro)
-- adicionar testes unitários (passo futuro)
 - adicionar rewind step (avaliar a viabilidade) (passo futuro)
-- deixar tamanho do log salvo configurável e adicionar opção de salvar o log em um arquivo
-- adicionar teste de alterar breakpoints com a simulação rodando (passo futuro)
-- adicionar mais metricas de fila, media de itens na fila, min e max (fila de put get e fila de request)
+- revizar testes unitários 
+- corrigir gif do readme para rodar em loop (antes de postar no pypi oficial adicionar mais gifs e imagens do projeto)
+- padronizar logs json gerados, definir melhor o padrão das mensagens, atualmente está muito bagunçado
+- liberar edição de posição de blocos e clique com o direito antes de precisar dar play na gui
+
 
 
 ---

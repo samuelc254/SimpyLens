@@ -413,6 +413,37 @@ class SimulationController:
         except simpy.core.EmptySchedule:
             pass
 
+    def run_headless(self):
+        if not self._model:
+            return
+
+        if self.env is None:
+            self.reset()
+
+        self.running = True
+        while self.running and self.env.peek() != simpy.core.Infinity:
+            try:
+                self.env.step()
+                self.update_time_cb(self.env.now)
+
+                # Process logs
+                step_logs = self._step_logs()
+                if step_logs:
+                    self._emit_logs(list(step_logs))
+                    step_logs.clear()
+
+                breakpoint_event = self._check_breakpoints()
+                if breakpoint_event and breakpoint_event.get("pause_on_hit", True):
+                    self.running = False
+                    return
+
+                pending_transfers = self._pending_transfers()
+                if pending_transfers:
+                    pending_transfers.clear()
+            except simpy.core.EmptySchedule:
+                self.running = False
+                break
+
     def pause(self):
         self.running = False
 
@@ -594,7 +625,10 @@ class Lens:
         if self._sim_ctrl is None:
             return
         self._sim_ctrl.set_model(self._model)
-        self._sim_ctrl.run()
+        if self._gui:
+            self._sim_ctrl.run()
+        else:
+            self._sim_ctrl.run_headless()
 
     def pause(self):
         if self._sim_ctrl is None:
