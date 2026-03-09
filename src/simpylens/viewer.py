@@ -215,8 +215,26 @@ class Viewer(tk.Tk):
             command=self.on_reset_click,
         ).pack(side=tk.LEFT, padx=2)
 
-        self.lbl_time = ttk.Label(bar, text="Time: 0.00", font=("Consolas", 14, "bold"))
-        self.lbl_time.pack(side=tk.LEFT, padx=20)
+        # --- Time + Step display panel ---
+        info_frame = ttk.Frame(bar, relief="groove", padding=(8, 3))
+        info_frame.pack(side=tk.LEFT, padx=16)
+
+        # Time
+        time_block = ttk.Frame(info_frame)
+        time_block.pack(side=tk.LEFT, padx=(0, 16))
+        ttk.Label(time_block, text="TIME", font=("Segoe UI", 7), foreground="#888").pack(anchor="w")
+        self.lbl_time = ttk.Label(time_block, text="0.00", font=("Consolas", 13, "bold"))
+        self.lbl_time.pack(anchor="w")
+
+        # Separator
+        ttk.Separator(info_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=(0, 16), pady=2)
+
+        # Step
+        step_block = ttk.Frame(info_frame)
+        step_block.pack(side=tk.LEFT)
+        ttk.Label(step_block, text="STEP", font=("Segoe UI", 7), foreground="#888").pack(anchor="w")
+        self.lbl_step = ttk.Label(step_block, text="—", font=("Consolas", 13, "bold"))
+        self.lbl_step.pack(anchor="w")
 
         spd_frame = ttk.Frame(bar)
         spd_frame.pack(side=tk.LEFT, padx=20)
@@ -244,6 +262,8 @@ class Viewer(tk.Tk):
         self.paused_breakpoint_id = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.reset(self.current_model)
+        self.lbl_time.config(text="—")
+        self.lbl_step.config(text="—")
         self.after(100, self.center_view)
 
     def _on_breakpoint_hit(self, event):
@@ -277,8 +297,15 @@ class Viewer(tk.Tk):
         return self.sim_ctrl.list_breakpoints()
 
     def update_time_display(self, now):
-        """Updates time label and calculates ticks/s in the interface."""
-        self.lbl_time.config(text=f"Time: {now:.2f}")
+        """Updates time label, step label and calculates ticks/s in the interface."""
+        self.lbl_time.config(text=f"{now:.4f}")
+
+        # Update current step from the sim environment if available
+        env = getattr(self.sim_ctrl, "env", None)
+        if env is not None:
+            step = getattr(env, "_step_count", None)
+            if step is not None:
+                self.lbl_step.config(text=str(step))
 
         current_time = time.time()
         self.tick_count += 1
@@ -707,70 +734,86 @@ class Viewer(tk.Tk):
         if not isinstance(payload, dict):
             return str(payload)
 
-        kind = payload.get("kind")
+        kind = payload.get("kind", "")
+        event = payload.get("event", "")
+        timestamp = float(payload.get("time", 0.0))
+        message = payload.get("message", "")
+        data = payload.get("data") or {}
 
-        if kind == "RESOURCE":
-            timestamp = float(payload.get("time", 0.0))
-            process_name = payload.get("process", "?")
-            action = payload.get("action", "?")
-            origin = payload.get("from", "?")
-            destination = payload.get("to", "?")
-            detail = payload.get("detail")
+        def _trunc(text, limit=100):
+            text = str(text)
+            return text if len(text) <= limit else text[:limit] + "..."
 
-            if action == "release":
-                base = f"[{timestamp:.2f}] [RESOURCE] {process_name} released '{origin}' -> {destination}"
-            else:
-                base = f"[{timestamp:.2f}] [RESOURCE] {process_name} {action} {origin} -> {destination}"
+        # --- SIM ---
+        if kind == "SIM":
+            return f"[{timestamp:.2f}] [SIM] {message}"
 
-            if detail is not None:
-                return f"{base} | {json.dumps(detail, ensure_ascii=False, sort_keys=True)}"
-            return base
-
+        # --- STEP ---
         if kind == "STEP":
-            timestamp = float(payload.get("time", 0.0))
-            step = payload.get("step", "?")
-            phase = payload.get("phase", "?")
-            detail = payload.get("detail") or {}
-
-            if phase == "before":
-                event = detail.get("event", "?")
+            if event == "STEP_BEFORE":
+                step = data.get("step", "?")
+                sim_ev = data.get("sim_event", "?")
                 extras = []
-                if "resource" in detail:
-                    extras.append(f"resource={detail['resource']}")
-                if "process" in detail:
-                    extras.append(f"process={detail['process']}")
-                if "delay" in detail:
-                    extras.append(f"delay={detail['delay']}")
-                if "triggering" in detail:
-                    extras.append(f"triggering={','.join(detail['triggering'])}")
-                suffix = f" | {' | '.join(extras)}" if extras else ""
-                return f"[{timestamp:.2f}] [before] [STEP {step}] event={event}{suffix}"
+                if "triggering" in data:
+                    extras.append(f"triggering={','.join(data['triggering'])}")
+                if "delay" in data:
+                    extras.append(f"delay={data['delay']}")
+                if "resource" in data:
+                    extras.append(f"resource={data['resource']}")
+                if "process" in data and "triggering" not in data:
+                    extras.append(f"process={data['process']}")
+                suffix = " | " + " | ".join(extras) if extras else ""
+                return f"[{timestamp:.2f}] [STEP \u25b6 {step}] {sim_ev}{suffix}"
 
-            if phase == "after":
-                active_process = detail.get("active_process", "-")
-                return f"[{timestamp:.2f}] [after] [STEP {step}] running={active_process}"
+            if event == "STEP_AFTER":
+                step = data.get("step", "?")
+                active = data.get("active_process", "-")
+                return f"[{timestamp:.2f}] [STEP \u25c4 {step}] active={active}"
 
-        if kind == "STATUS":
-            event = payload.get("event", "UNKNOWN")
+            return f"[{timestamp:.2f}] [STEP] {message}"
+
+        # --- RESOURCE ---
+        if kind == "RESOURCE":
+            process_name = data.get("process", "?")
+            resource_name = data.get("resource", "?")
+            from_name = data.get("from", "?")
+            to_name = data.get("to", "?")
+            extras = []
+            if "amount" in data:
+                extras.append(f"amount={data['amount']}")
+            if "item" in data:
+                extras.append(f"item={_trunc(data['item'], 40)}")
+            if "filter" in data:
+                extras.append(f"filter={_trunc(data['filter'], 40)}")
+            suffix = " | " + " | ".join(extras) if extras else ""
+            move = f"({from_name} \u2192 {to_name})"
+            if message:
+                return f"[{timestamp:.2f}] [RESOURCE] {message}  {move}{suffix}"
+            return f"[{timestamp:.2f}] [RESOURCE] {process_name} {event.lower()} {resource_name}  {move}{suffix}"
+
+        # --- BREAKPOINT ---
+        if kind == "BREAKPOINT":
+            label = data.get("label") or data.get("condition", "-")
+            condition = data.get("condition", "-")
             if event == "BREAKPOINT_HIT":
-                label = payload.get("label", "-")
-                condition = payload.get("condition") or payload.get("expression", "-")
-                hit_count = payload.get("hit_count", "?")
-                timestamp = float(payload.get("time", 0.0))
+                hit_count = data.get("hit_count", "?")
+                cond_str = _trunc(condition, 80)
                 if str(label) == str(condition):
-                    return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_HIT | condition={condition} | hits={hit_count}"
-                return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_HIT | label={label} | condition={condition} | hits={hit_count}"
+                    return f"[{timestamp:.2f}] [BREAKPOINT \u25cf] {cond_str} | hits={hit_count}"
+                return f"[{timestamp:.2f}] [BREAKPOINT \u25cf] {label} | condition={cond_str} | hits={hit_count}"
 
             if event == "BREAKPOINT_ERROR":
-                label = payload.get("label", "-")
-                condition = payload.get("condition") or payload.get("expression", "-")
-                error_text = payload.get("error", "-")
-                timestamp = float(payload.get("time", 0.0))
+                error_text = _trunc(data.get("error", "-"), 80)
+                cond_str = _trunc(condition, 60)
                 if str(label) == str(condition):
-                    return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_ERROR | condition={condition} | error={error_text}"
-                return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_ERROR | label={label} | condition={condition} | error={error_text}"
+                    return f"[{timestamp:.2f}] [BREAKPOINT \u2717] {cond_str} | error={error_text}"
+                return f"[{timestamp:.2f}] [BREAKPOINT \u2717] {label} | condition={cond_str} | error={error_text}"
 
-            return f"[STATUS] {event}"
+            return f"[{timestamp:.2f}] [BREAKPOINT] {message}"
+
+        # --- STATUS / fallback ---
+        if message:
+            return f"[{timestamp:.2f}] [STATUS] {message}"
 
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
@@ -1643,7 +1686,7 @@ class Viewer(tk.Tk):
         now = 0.0
         if hasattr(self, "sim_ctrl") and self.sim_ctrl.env is not None:
             now = self.sim_ctrl.env.now
-        self.lbl_time.config(text=f"Time: {now:.2f}")
+        self.lbl_time.config(text=f"{now:.4f}")
 
         start_x = (50 * self.scale) + self.offset_x
         start_y = (50 * self.scale) + self.offset_y

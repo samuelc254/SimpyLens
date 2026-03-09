@@ -101,10 +101,7 @@ def _serialize_value(value):
     return payload
 
 
-def _format_payload(base_payload, detail=None):
-    payload = dict(base_payload)
-    if detail:
-        payload["detail"] = detail
+def _format_payload(payload):
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
@@ -238,7 +235,17 @@ def _extract_call_target_from_frame_source(frame):
     return None
 
 
-def register_interaction(env, resource_instance, action, detail=None):
+def _action_to_event(action_name):
+    """Maps a lowercased action string to its log event name."""
+    return {
+        "request": "REQUEST",
+        "release": "RELEASE",
+        "put": "PUT",
+        "get": "GET",
+    }.get(action_name, action_name.upper())
+
+
+def register_interaction(env, resource_instance, action, extra_data=None):
     if not env or not hasattr(env, "active_process") or env.active_process is None:
         return
 
@@ -256,6 +263,7 @@ def register_interaction(env, resource_instance, action, detail=None):
     current_name = getattr(resource_instance, "visual_name", str(resource_instance))
     previous_resource = _resolve_process_resource(env, process)
     action_name = str(action).lower()
+    event_name = _action_to_event(action_name)
 
     if previous_resource is None:
         previous_name = "<START>"
@@ -264,30 +272,57 @@ def register_interaction(env, resource_instance, action, detail=None):
 
     if action_name == "release":
         from_name = previous_name if previous_resource is not None else current_name
-        payload = {
-            "kind": "RESOURCE",
-            "action": action_name,
-            "from": from_name,
-            "process": process_name,
+        data = {
             "resource": current_name,
-            "time": env.now,
+            "process": process_name,
+            "from": from_name,
             "to": "<IDLE>",
         }
-        step_logs.append(_format_payload(payload, detail))
+        if extra_data:
+            data.update(extra_data)
+        payload = {
+            "schema_version": "1.0",
+            "kind": "RESOURCE",
+            "event": event_name,
+            "time": env.now,
+            "level": "INFO",
+            "source": "tracking",
+            "message": f"{process_name} released {current_name}",
+            "data": data,
+        }
+        step_logs.append(_format_payload(payload))
         process_locations[process] = weakref.ref(resource_instance)
         return
 
-    payload = {
-        "kind": "RESOURCE",
-        "action": action_name,
-        "from": previous_name,
-        "process": process_name,
+    data = {
         "resource": current_name,
-        "time": env.now,
+        "process": process_name,
+        "from": previous_name,
         "to": current_name,
     }
+    if extra_data:
+        data.update(extra_data)
 
-    step_logs.append(_format_payload(payload, detail))
+    if action_name == "request":
+        message = f"{process_name} requested {current_name}"
+    elif action_name == "put":
+        message = f"{process_name} put into {current_name}"
+    elif action_name == "get":
+        message = f"{process_name} got from {current_name}"
+    else:
+        message = f"{process_name} {action_name} {current_name}"
+
+    payload = {
+        "schema_version": "1.0",
+        "kind": "RESOURCE",
+        "event": event_name,
+        "time": env.now,
+        "level": "INFO",
+        "source": "tracking",
+        "message": message,
+        "data": data,
+    }
+    step_logs.append(_format_payload(payload))
 
     if previous_resource is not None:
         if previous_resource != resource_instance:
@@ -368,23 +403,11 @@ class TrackedResource(OriginalResource):
         self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
-        detail = {}
-        if args:
-            detail["request"] = _serialize_value(args[0])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "request", detail=detail)
+        register_interaction(self._env, self, "request")
         return super().request(*args, **kwargs)
 
     def release(self, *args, **kwargs):
-        detail = {}
-        if args:
-            detail["release"] = _serialize_value(args[0])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "release", detail=detail)
+        register_interaction(self._env, self, "release")
         return super().release(*args, **kwargs)
 
 
@@ -397,23 +420,11 @@ class TrackedPriorityResource(OriginalPriorityResource):
         self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
-        detail = {}
-        if args:
-            detail["request"] = _serialize_value(args[0])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "request", detail=detail)
+        register_interaction(self._env, self, "request")
         return super().request(*args, **kwargs)
 
     def release(self, *args, **kwargs):
-        detail = {}
-        if args:
-            detail["release"] = _serialize_value(args[0])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "release", detail=detail)
+        register_interaction(self._env, self, "release")
         return super().release(*args, **kwargs)
 
 
@@ -426,23 +437,11 @@ class TrackedPreemptiveResource(OriginalPreemptiveResource):
         self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
-        detail = {}
-        if args:
-            detail["request"] = _serialize_value(args[0])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "request", detail=detail)
+        register_interaction(self._env, self, "request")
         return super().request(*args, **kwargs)
 
     def release(self, *args, **kwargs):
-        detail = {}
-        if args:
-            detail["release"] = _serialize_value(args[0])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "release", detail=detail)
+        register_interaction(self._env, self, "release")
         return super().release(*args, **kwargs)
 
 
@@ -455,27 +454,21 @@ class TrackedContainer(OriginalContainer):
         self._env.tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
-        detail = {}
+        extra = {}
         if args:
-            detail["amount"] = _serialize_value(args[0])
+            extra["amount"] = _serialize_value(args[0])
         elif "amount" in kwargs:
-            detail["amount"] = _serialize_value(kwargs["amount"])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "put", detail=detail)
+            extra["amount"] = _serialize_value(kwargs["amount"])
+        register_interaction(self._env, self, "put", extra_data=extra or None)
         return super().put(*args, **kwargs)
 
     def get(self, *args, **kwargs):
-        detail = {}
+        extra = {}
         if args:
-            detail["amount"] = _serialize_value(args[0])
+            extra["amount"] = _serialize_value(args[0])
         elif "amount" in kwargs:
-            detail["amount"] = _serialize_value(kwargs["amount"])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "get", detail=detail)
+            extra["amount"] = _serialize_value(kwargs["amount"])
+        register_interaction(self._env, self, "get", extra_data=extra or None)
         return super().get(*args, **kwargs)
 
 
@@ -489,25 +482,16 @@ class TrackedStore(OriginalStore):
         self._env.tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
-        detail = {}
+        extra = {}
         if args:
-            detail["item"] = _serialize_value(args[0])
+            extra["item"] = _serialize_value(args[0])
         elif "item" in kwargs:
-            detail["item"] = _serialize_value(kwargs["item"])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "put", detail=detail)
+            extra["item"] = _serialize_value(kwargs["item"])
+        register_interaction(self._env, self, "put", extra_data=extra or None)
         return super().put(*args, **kwargs)
 
     def get(self, *args, **kwargs):
-        detail = {}
-        if args:
-            detail["args"] = _serialize_value(args[0])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "get", detail=detail)
+        register_interaction(self._env, self, "get")
         return super().get(*args, **kwargs)
 
 
@@ -521,25 +505,16 @@ class TrackedPriorityStore(OriginalPriorityStore):
         self._env.tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
-        detail = {}
+        extra = {}
         if args:
-            detail["item"] = _serialize_value(args[0])
+            extra["item"] = _serialize_value(args[0])
         elif "item" in kwargs:
-            detail["item"] = _serialize_value(kwargs["item"])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "put", detail=detail)
+            extra["item"] = _serialize_value(kwargs["item"])
+        register_interaction(self._env, self, "put", extra_data=extra or None)
         return super().put(*args, **kwargs)
 
     def get(self, *args, **kwargs):
-        detail = {}
-        if args:
-            detail["args"] = _serialize_value(args[0])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "get", detail=detail)
+        register_interaction(self._env, self, "get")
         return super().get(*args, **kwargs)
 
 
@@ -553,27 +528,21 @@ class TrackedFilterStore(OriginalFilterStore):
         self._env.tracked_resources.add(self)
 
     def put(self, *args, **kwargs):
-        detail = {}
+        extra = {}
         if args:
-            detail["item"] = _serialize_value(args[0])
+            extra["item"] = _serialize_value(args[0])
         elif "item" in kwargs:
-            detail["item"] = _serialize_value(kwargs["item"])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "put", detail=detail)
+            extra["item"] = _serialize_value(kwargs["item"])
+        register_interaction(self._env, self, "put", extra_data=extra or None)
         return super().put(*args, **kwargs)
 
     def get(self, *args, **kwargs):
-        detail = {}
+        extra = {}
         if args:
-            detail["filter"] = _serialize_value(args[0])
+            extra["filter"] = _serialize_value(args[0])
         elif "filter" in kwargs:
-            detail["filter"] = _serialize_value(kwargs["filter"])
-        if kwargs:
-            detail["kwargs"] = _serialize_value(kwargs)
-        detail = detail or None
-        register_interaction(self._env, self, "get", detail=detail)
+            extra["filter"] = _serialize_value(kwargs["filter"])
+        register_interaction(self._env, self, "get", extra_data=extra or None)
         return super().get(*args, **kwargs)
 
 
@@ -589,8 +558,10 @@ class TrackedEnvironment(simpy.Environment):
 
         _ensure_tracking_state(self)
         step_logs = self.step_logs
+        step_num = self._step_count
 
-        details = {}
+        # --- Inspect the next event before executing it ---
+        data_before = {"step": step_num}
         triggering_processes = []
         event_queue = getattr(self, "_queue", [])
 
@@ -599,20 +570,20 @@ class TrackedEnvironment(simpy.Environment):
                 next_item = event_queue[0]
                 event = next_item[3]
 
-                event_name = type(event).__name__
-                details["event"] = event_name
-                self.last_event_name = event_name
+                sim_event_name = type(event).__name__
+                data_before["sim_event"] = sim_event_name
+                self.last_event_name = sim_event_name
 
-                if event_name == "Timeout":
-                    details["delay"] = event.value
+                if sim_event_name == "Timeout":
+                    data_before["delay"] = getattr(event, "_delay", None)
 
                 if hasattr(event, "resource"):
                     resource = event.resource
                     resource_name = getattr(resource, "visual_name", str(resource))
-                    details["resource"] = resource_name
+                    data_before["resource"] = resource_name
 
-                if event_name == "Process" and hasattr(event, "name"):
-                    details["process"] = event.name
+                if sim_event_name == "Process" and hasattr(event, "name"):
+                    data_before["process"] = event.name
 
                 if hasattr(event, "callbacks") and event.callbacks:
                     waiting_processes = []
@@ -629,27 +600,43 @@ class TrackedEnvironment(simpy.Environment):
 
                     if waiting_processes:
                         triggering_processes = list(waiting_processes)
-                        details["triggering"] = waiting_processes
+                        data_before["triggering"] = waiting_processes
             except Exception as exc:
-                details["inspect_error"] = str(exc)
+                data_before["sim_event"] = "UNKNOWN"
+                data_before["inspect_error"] = str(exc)
+                self.last_event_name = "UNKNOWN"
         else:
-            details["event"] = "EMPTY_QUEUE"
+            data_before["sim_event"] = "EMPTY_QUEUE"
             self.last_event_name = "EMPTY_QUEUE"
 
+        # Build human-readable message for STEP_BEFORE
+        sim_ev = data_before.get("sim_event", "?")
+        msg_parts = [f"Step {step_num}: {sim_ev}"]
+        if "triggering" in data_before:
+            msg_parts.append(f"triggering={','.join(data_before['triggering'])}")
+        if "delay" in data_before:
+            msg_parts.append(f"delay={data_before['delay']}")
+        if "resource" in data_before:
+            msg_parts.append(f"resource={data_before['resource']}")
+        if "process" in data_before and "triggering" not in data_before:
+            msg_parts.append(f"process={data_before['process']}")
+
         step_logs.append(
-            _format_payload(
-                {
-                    "kind": "STEP",
-                    "phase": "before",
-                    "step": self._step_count,
-                    "time": self.now,
-                },
-                details,
-            )
+            _format_payload({
+                "schema_version": "1.0",
+                "kind": "STEP",
+                "event": "STEP_BEFORE",
+                "time": self.now,
+                "level": "DEBUG",
+                "source": "tracking",
+                "message": " | ".join(msg_parts),
+                "data": data_before,
+            })
         )
 
         super().step()
 
+        # --- After-step: check if active process differs from expected ---
         active_process_name = None
         if self.active_process:
             active_process_name = self.active_process.name
@@ -659,26 +646,26 @@ class TrackedEnvironment(simpy.Environment):
         before_expected_process = None
         if triggering_processes:
             before_expected_process = ",".join(triggering_processes)
-        elif details.get("process"):
-            before_expected_process = str(details.get("process"))
+        elif data_before.get("process"):
+            before_expected_process = str(data_before["process"])
 
         effective_after_process = active_process_name or "-"
         effective_before_process = before_expected_process or "-"
         self.last_process_name = None if effective_after_process == "-" else effective_after_process
 
         should_log_after = effective_after_process != effective_before_process
-
         if should_log_after:
             step_logs.append(
-                _format_payload(
-                    {
-                        "kind": "STEP",
-                        "phase": "after",
-                        "step": self._step_count,
-                        "time": self.now,
-                    },
-                    {"active_process": effective_after_process},
-                )
+                _format_payload({
+                    "schema_version": "1.0",
+                    "kind": "STEP",
+                    "event": "STEP_AFTER",
+                    "time": self.now,
+                    "level": "DEBUG",
+                    "source": "tracking",
+                    "message": f"Step {step_num}: active={effective_after_process}",
+                    "data": {"step": step_num, "active_process": effective_after_process},
+                })
             )
 
 

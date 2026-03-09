@@ -56,27 +56,40 @@ class _LogBuffer:
                 payload = {
                     "kind": "STATUS",
                     "event": "MESSAGE",
+                    "level": "INFO",
+                    "source": "lens",
                     "message": message,
+                    "data": None,
                 }
         else:
             payload = {
                 "kind": "STATUS",
                 "event": "MESSAGE",
+                "level": "INFO",
+                "source": "lens",
                 "message": str(message),
+                "data": None,
             }
 
         event = dict(payload)
-        if "data" not in event and "detail" in event:
-            event["data"] = event.get("detail")
 
+        # Ensure required envelope fields exist
         event.setdefault("schema_version", "1.0")
         event.setdefault("kind", "STATUS")
-        event.setdefault("event", "UNKNOWN")
+        event.setdefault("event", "MESSAGE")
         event.setdefault("level", "INFO")
         event.setdefault("source", "lens")
+        event.setdefault("message", "")
+        event.setdefault("data", None)
 
         if "time" not in event:
             event["time"] = float(now) if now is not None else 0.0
+
+        # Strip legacy fields that no longer belong in the schema
+        event.pop("detail", None)
+        event.pop("phase", None)
+        event.pop("step", None)
+        event.pop("action", None)
 
         event["seq"] = self._next_seq
         self._next_seq += 1
@@ -251,15 +264,18 @@ class SimulationController:
                 err_text = f"{type(exc).__name__}: {exc}"
                 self._emit_event(
                     {
-                        "kind": "STATUS",
+                        "kind": "BREAKPOINT",
                         "event": "BREAKPOINT_ERROR",
                         "time": self.env.now,
-                        "breakpoint_id": breakpoint.id,
-                        "label": breakpoint.label,
-                        "condition": breakpoint.expression,
-                        "expression": breakpoint.expression,
-                        "error": err_text,
                         "level": "ERROR",
+                        "source": "lens",
+                        "message": f"Breakpoint error: {breakpoint.label or breakpoint.expression}",
+                        "data": {
+                            "breakpoint_id": breakpoint.id,
+                            "label": breakpoint.label,
+                            "condition": breakpoint.expression,
+                            "error": err_text,
+                        },
                     }
                 )
                 breakpoint.last_error = err_text
@@ -271,18 +287,34 @@ class SimulationController:
                 continue
 
             breakpoint.record_hit()
+            hit_label = breakpoint.label or breakpoint.expression
+            hit_data = {
+                "breakpoint_id": breakpoint.id,
+                "label": breakpoint.label,
+                "condition": breakpoint.expression,
+                "hit_count": breakpoint.hit_count,
+                "pause_on_hit": breakpoint.pause_on_hit,
+                "edge": breakpoint.edge,
+            }
             event = {
                 "breakpoint_id": breakpoint.id,
                 "label": breakpoint.label,
                 "condition": breakpoint.expression,
-                "expression": breakpoint.expression,
                 "time": self.env.now,
                 "hit_count": breakpoint.hit_count,
                 "pause_on_hit": breakpoint.pause_on_hit,
                 "edge": breakpoint.edge,
             }
 
-            self._emit_event({"kind": "STATUS", "event": "BREAKPOINT_HIT", **event})
+            self._emit_event({
+                "kind": "BREAKPOINT",
+                "event": "BREAKPOINT_HIT",
+                "time": self.env.now,
+                "level": "INFO",
+                "source": "lens",
+                "message": f"Breakpoint hit: {hit_label} (hits={breakpoint.hit_count})",
+                "data": hit_data,
+            })
             if self.on_breakpoint_cb:
                 try:
                     self.on_breakpoint_cb(event)
@@ -343,7 +375,16 @@ class SimulationController:
         random.seed(self.seed)
 
         self.running = False
-        self._emit_event({"kind": "STATUS", "event": "RESET", "time": 0.0})
+        seed = self.seed
+        self._emit_event({
+            "kind": "SIM",
+            "event": "RESET",
+            "time": 0.0,
+            "level": "INFO",
+            "source": "lens",
+            "message": f"Simulation reset with seed {seed}",
+            "data": {"seed": seed},
+        })
 
         if not self._model:
             self.env = None
@@ -443,6 +484,17 @@ class SimulationController:
             except simpy.core.EmptySchedule:
                 self.running = False
                 break
+
+        self.running = False
+        self._emit_event({
+            "kind": "SIM",
+            "event": "RUN_COMPLETE",
+            "time": self.env.now if self.env is not None else 0.0,
+            "level": "INFO",
+            "source": "lens",
+            "message": "Simulation complete",
+            "data": None,
+        })
 
     def pause(self):
         self.running = False
