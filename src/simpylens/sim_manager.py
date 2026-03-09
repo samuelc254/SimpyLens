@@ -664,6 +664,15 @@ class Lens:
             self._sim_ctrl.set_model(model)
 
     def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
+        if self.viewer is not None:
+            return self.viewer.add_breakpoint(
+                condition=condition,
+                label=label,
+                enabled=enabled,
+                pause_on_hit=pause_on_hit,
+                edge=edge,
+            )
+
         return self._sim_ctrl.add_breakpoint(
             condition=condition,
             label=label,

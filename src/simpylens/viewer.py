@@ -104,7 +104,10 @@ class Viewer(tk.Tk):
             seed=42 if seed is None else seed,
         )
 
+        # Define deterministic initial state before the breakpoint panel is rendered.
+        self._reset_breakpoint_panel_initial_state()
         self._setup_breakpoint_panel()
+        self._apply_breakpoint_panel_state()
         self._refresh_breakpoint_panel()
 
         if self.current_model:
@@ -282,13 +285,18 @@ class Viewer(tk.Tk):
         self._refresh_breakpoint_panel(force=True, reschedule=False)
 
     def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
-        return self.sim_ctrl.add_breakpoint(
+        breakpoint_id = self.sim_ctrl.add_breakpoint(
             condition=condition,
             label=label,
             enabled=enabled,
             pause_on_hit=pause_on_hit,
             edge=edge,
         )
+        if self.breakpoint_panel_collapsed and self._has_defined_breakpoints():
+            self.breakpoint_panel_collapsed = False
+            self._apply_breakpoint_panel_state()
+        self._refresh_breakpoint_panel(force=True, reschedule=False)
+        return breakpoint_id
 
     def remove_breakpoint(self, breakpoint_id):
         return self.sim_ctrl.remove_breakpoint(breakpoint_id)
@@ -464,6 +472,38 @@ class Viewer(tk.Tk):
         self.breakpoint_tree.bind("<Button-1>", self._on_breakpoint_tree_click)
         bp_scroll.config(command=self.breakpoint_tree.yview)
 
+    def _has_defined_breakpoints(self):
+        if not hasattr(self, "sim_ctrl") or self.sim_ctrl is None:
+            return False
+        return bool(self.sim_ctrl.list_breakpoints())
+
+    def _reset_breakpoint_panel_initial_state(self):
+        # Keep initial state stable and predictable before first render.
+        self.paused_breakpoint_ids.clear()
+        self.last_breakpoint_hit_step = None
+        self.breakpoint_row_cache = []
+        self.breakpoint_panel_collapsed = not self._has_defined_breakpoints()
+
+    def _apply_breakpoint_panel_state(self):
+        if not hasattr(self, "breakpoint_panel"):
+            return
+
+        self.breakpoint_content.pack_forget()
+        self.breakpoint_inner.pack_forget()
+        self.breakpoint_resize_handle.pack_forget()
+        self.breakpoint_tab.pack_forget()
+
+        if self.breakpoint_panel_collapsed:
+            self.breakpoint_tab.pack(side=tk.RIGHT, fill=tk.Y)
+            self._redraw_breakpoint_tab()
+            self.btn_toggle_breakpoint_panel.config(text="◀")
+            return
+
+        self.breakpoint_resize_handle.pack(side=tk.LEFT, fill=tk.Y)
+        self.breakpoint_inner.pack(side=tk.LEFT, fill=tk.Y)
+        self.breakpoint_content.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=(0, 6))
+        self.btn_toggle_breakpoint_panel.config(text="▶")
+
     def _redraw_breakpoint_tab(self, _event=None):
         if not hasattr(self, "breakpoint_tab"):
             return
@@ -483,20 +523,8 @@ class Viewer(tk.Tk):
         )
 
     def toggle_breakpoint_panel(self):
-        if self.breakpoint_panel_collapsed:
-            self.breakpoint_tab.pack_forget()
-            self.breakpoint_resize_handle.pack(side=tk.LEFT, fill=tk.Y)
-            self.breakpoint_inner.pack(side=tk.LEFT, fill=tk.Y)
-            self.breakpoint_content.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=(0, 6))
-            self.btn_toggle_breakpoint_panel.config(text="▶")
-            self.breakpoint_panel_collapsed = False
-        else:
-            self.breakpoint_content.pack_forget()
-            self.breakpoint_inner.pack_forget()
-            self.breakpoint_resize_handle.pack_forget()
-            self.breakpoint_tab.pack(side=tk.RIGHT, fill=tk.Y)
-            self._redraw_breakpoint_tab()
-            self.breakpoint_panel_collapsed = True
+        self.breakpoint_panel_collapsed = not self.breakpoint_panel_collapsed
+        self._apply_breakpoint_panel_state()
 
     def _start_breakpoint_resize(self, event):
         self.breakpoint_resize_start_x = event.x_root

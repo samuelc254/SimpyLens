@@ -1,10 +1,33 @@
 # SimpyLens: SimPy Visualization and Debugging Toolkit for Discrete-Event Simulation
 
+[![PyPI version](https://img.shields.io/pypi/v/simpylens.svg)](https://pypi.org/project/simpylens/)
+[![Python versions](https://img.shields.io/pypi/pyversions/simpylens.svg)](https://pypi.org/project/simpylens/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 SimpyLens is a zero-invasion toolkit for **SimPy model visualization, simulation debugging, and runtime inspection**. It helps you understand queueing behavior, resource contention, and process flow in real time, without rewriting your simulation business logic.
 
 It is designed for developers, researchers, and operations teams building **discrete-event simulation in Python** with SimPy.
 
-![SimpyLens running](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/basic_sim.gif?v=20260302)
+## Table of Contents
+
+- [Why SimpyLens](#why-simpylens)
+- [SimPy Visual Demos and Screenshots](#simpy-visual-demos-and-screenshots)
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Quick Start (GUI)](#quick-start-gui)
+- [Quick Start (Headless for tests/CI)](#quick-start-headless-for-testsci)
+- [Public API](#public-api)
+- [Breakpoints](#breakpoints)
+- [Logs and Event Schema](#logs-and-event-schema)
+- [Metrics](#metrics)
+- [User Interface Guide](#user-interface-guide)
+- [SimPy Examples Included](#simpy-examples-included)
+- [Project Metadata](#project-metadata)
+- [Limitations](#limitations)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+- [Credits](#credits)
+- [License](#license)
 
 ## Why SimpyLens
 
@@ -14,6 +37,40 @@ It is designed for developers, researchers, and operations teams building **disc
 - Structured event logs for simulation, resources, step lifecycle, and breakpoints.
 - Headless mode for automated tests and CI usage.
 - Metrics patch for queue wait, usage time, levels, and throughput indicators.
+
+## SimPy Visual Demos and Screenshots
+
+These visuals show SimpyLens in practical **discrete-event simulation debugging** workflows, including breakpoint monitoring, resource metrics inspection, and manual layout control.
+
+### Animated Demo: Pottery Factory Simulation (18 FPS, loop)
+
+![SimPy pottery factory visualization and debugging workflow in SimpyLens](assets/pottery_factory_18fps.gif)
+
+This GIF demonstrates real-time resource flow, simulation controls, and runtime visualization for a production-style SimPy model.
+
+### Animated Demo: Manual Layout Interaction (18 FPS, loop)
+
+![SimPy manual layout interaction for simulation resource visualization in SimpyLens](assets/manual_layout_18fps.gif)
+
+This GIF highlights viewport navigation and manual resource block arrangement for clearer simulation analysis.
+
+### Breakpoint Panel Screenshot
+
+![SimPy breakpoint panel with conditions, hit counters, and edge modes in SimpyLens](assets/pottery_breakpoints.png)
+
+Shows conditional breakpoints, hit tracking, pause flags, and edge behavior (`none`, `rising`, `falling`) in the debugger UI.
+
+### Resource Metrics Details (Store)
+
+![Store resource metrics details window for SimPy debugging in SimpyLens](assets/store_details.png)
+
+Displays store-focused runtime metrics, queue state, and item inspection useful for bottleneck analysis.
+
+### Resource Metrics Details (Resource)
+
+![Resource metrics details window with queue and utilization statistics in SimpyLens](assets/resource_details.png)
+
+Shows utilization and waiting-time metrics for `Resource` entities, supporting performance diagnostics in simulation models.
 
 ## Key Features
 
