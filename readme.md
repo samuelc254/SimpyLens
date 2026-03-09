@@ -206,11 +206,19 @@ The logger emits status events such as:
 
 ## Running examples
 
-Examples are available in `examples/`:
+Examples are available in `examples/` and are grouped by origin:
 
-- `gas_station_refueling.py`
+Adapted from SimPy official examples/tutorial lineage:
+- `bank_renege.py` (adapted from SimPy "bank" tutorial family)
+- `gas_station_refueling.py` (adapted from SimPy gas station refuel example)
+
+Original SimpyLens examples:
 - `pottery_factory.py`
 - `wafer_fabrication.py`
+
+Credits:
+- SimPy project and documentation: https://simpy.readthedocs.io/
+- SimpyLens adaptations and original examples: project maintainers
 
 From project root:
 

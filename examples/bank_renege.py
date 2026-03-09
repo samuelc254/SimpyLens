@@ -1,15 +1,20 @@
-"""
-Bank renege example
+"""Bank Renege Example.
+
+Origin:
+    Adapted from the official SimPy examples/tutorial material.
+
+Credits:
+    - SimPy documentation and examples: https://simpy.readthedocs.io/
+    - Original "bank08.py" concept from TheBank tutorial lineage.
 
 Covers:
-
-- Resources: Resource
-- Condition events
+    - Resource usage (`simpy.Resource`)
+    - Condition events (`req | env.timeout(...)`)
+    - Log export with SimpyLens
 
 Scenario:
-  A counter with a random service time and customers who renege. Based on the
-  program bank08.py from TheBank tutorial of SimPy 2. (KGM)
-
+    A single service counter with random service times and customers that may
+    renege if waiting longer than their patience threshold.
 """
 
 import json
@@ -65,10 +70,10 @@ def setup(env):
     env.process(source(env, NEW_CUSTOMERS, INTERVAL_CUSTOMERS, counter))
 
 
-# Create an instance of SimpyLens with the setup function and run the simulation
+# Run the simulation headlessly and export event logs.
 lens = simpylens.Lens(model=setup, seed=RANDOM_SEED, gui=False)
 lens.run()
 
 logs = lens.get_logs()
 with open("bank_renege_logs.json", "w") as log_file:
-    json.dump(logs, log_file)
+    json.dump(logs, log_file, indent=4)

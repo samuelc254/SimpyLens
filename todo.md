@@ -5,7 +5,8 @@
 - adicionar rewind step (avaliar a viabilidade) (passo futuro)
 - revizar testes unitários 
 - corrigir gif do readme para rodar em loop (antes de postar no pypi oficial adicionar mais gifs e imagens do projeto)
-
+- fazer aba de breakpoint abrir no inicio somente se houverem breakpoints definidos em lens
+- corrigir acionamento de um break point está influenciando os outros breakpoints (são ignorados se ocorrem juntos)
 
 
 

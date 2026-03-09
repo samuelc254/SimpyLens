@@ -1,22 +1,23 @@
-"""
-Gas Station Refueling example.
+"""Gas Station Refueling Example.
 
-Original Credit: SimPy Examples (https://simpy.readthedocs.io/en/latest/examples/gas_station_refuel.html)
-Adapted for SimpyLens to demonstrate visualization and breakpoints.
+Origin:
+    Adapted from the official SimPy example:
+    https://simpy.readthedocs.io/en/latest/examples/gas_station_refuel.html
+
+Credits:
+    - SimPy project and example authors.
+    - SimpyLens adaptation for visualization and breakpoints.
 
 Covers:
-- Resources: Resource
-- Resources: Container
-- Waiting for other processes
+    - Resource usage (`simpy.Resource`)
+    - Container usage (`simpy.Container`)
+    - Process coordination (`yield env.process(...)`)
+    - Runtime breakpoints in SimpyLens
 
 Scenario:
-  A gas station has a limited number of gas pumps that share a common
-  fuel reservoir. Cars randomly arrive at the gas station, request one
-  of the fuel pumps and start refueling from that reservoir.
-
-  A gas station control process observes the gas station's fuel level
-  and calls a tank truck for refueling if the station's level drops
-  below a threshold.
+    A gas station has a limited number of pumps and a shared fuel reservoir.
+    Cars arrive at random intervals, refuel, and may wait for fuel replenishment
+    by a tank truck when inventory drops below a threshold.
 """
 
 import itertools
@@ -105,8 +106,7 @@ def setup(env):
 if __name__ == "__main__":
     lens = simpylens.Lens(model=setup, seed=RANDOM_SEED, title="Gas Station Refueling")
 
-    # Add a breakpoint to pause simulation when the tank truck arrives
-    # Expression evaluates if a breakpoint condition is met based on the logs
+    # Pause execution when the tank truck process is initialized.
     lens.add_breakpoint("env.last_event_name == 'Initialize' and env.last_process_name == 'tank_truck'", label="Tank truck on the way")
 
     lens.show()
