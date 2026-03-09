@@ -5,8 +5,7 @@
 - adicionar rewind step (avaliar a viabilidade) (passo futuro)
 - revizar testes unitários 
 - corrigir gif do readme para rodar em loop (antes de postar no pypi oficial adicionar mais gifs e imagens do projeto)
-- liberar edição de posição de blocos e clique com o direito antes de precisar dar play na gui
-- adicionar um getter publico para _step_count para poder ser usado em breakpoints
+
 
 
 

@@ -77,7 +77,7 @@ class Viewer(tk.Tk):
         self.breakpoint_panel_collapsed = False
         self.breakpoint_panel_width = 320
         self.breakpoint_panel_min_width = 220
-        self.breakpoint_panel_max_width = 560
+        self.breakpoint_panel_max_width = 1100
         self.breakpoint_resize_start_x = None
         self.breakpoint_resize_start_width = 0
         self.breakpoint_row_cache = []
@@ -216,15 +216,15 @@ class Viewer(tk.Tk):
         ).pack(side=tk.LEFT, padx=2)
 
         # --- Time + Step display panel ---
-        info_frame = ttk.Frame(bar, relief="groove", padding=(8, 3))
+        info_frame = ttk.Frame(bar, relief="groove", padding=(8, 4))
         info_frame.pack(side=tk.LEFT, padx=16)
 
         # Time
         time_block = ttk.Frame(info_frame)
         time_block.pack(side=tk.LEFT, padx=(0, 16))
-        ttk.Label(time_block, text="TIME", font=("Segoe UI", 7), foreground="#888").pack(anchor="w")
-        self.lbl_time = ttk.Label(time_block, text="0.00", font=("Consolas", 13, "bold"))
-        self.lbl_time.pack(anchor="w")
+        ttk.Label(time_block, text="TIME", font=("Segoe UI", 7), foreground="#888").pack(side=tk.LEFT, padx=(0, 5))
+        self.lbl_time = ttk.Label(time_block, text="—", font=("Consolas", 12, "bold"))
+        self.lbl_time.pack(side=tk.LEFT)
 
         # Separator
         ttk.Separator(info_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=(0, 16), pady=2)
@@ -232,9 +232,9 @@ class Viewer(tk.Tk):
         # Step
         step_block = ttk.Frame(info_frame)
         step_block.pack(side=tk.LEFT)
-        ttk.Label(step_block, text="STEP", font=("Segoe UI", 7), foreground="#888").pack(anchor="w")
-        self.lbl_step = ttk.Label(step_block, text="—", font=("Consolas", 13, "bold"))
-        self.lbl_step.pack(anchor="w")
+        ttk.Label(step_block, text="STEP", font=("Segoe UI", 7), foreground="#888").pack(side=tk.LEFT, padx=(0, 5))
+        self.lbl_step = ttk.Label(step_block, text="—", font=("Consolas", 12, "bold"))
+        self.lbl_step.pack(side=tk.LEFT)
 
         spd_frame = ttk.Frame(bar)
         spd_frame.pack(side=tk.LEFT, padx=20)
@@ -262,8 +262,6 @@ class Viewer(tk.Tk):
         self.paused_breakpoint_id = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.reset(self.current_model)
-        self.lbl_time.config(text="—")
-        self.lbl_step.config(text="—")
         self.after(100, self.center_view)
 
     def _on_breakpoint_hit(self, event):
@@ -298,14 +296,15 @@ class Viewer(tk.Tk):
 
     def update_time_display(self, now):
         """Updates time label, step label and calculates ticks/s in the interface."""
-        self.lbl_time.config(text=f"{now:.4f}")
-
-        # Update current step from the sim environment if available
         env = getattr(self.sim_ctrl, "env", None)
-        if env is not None:
-            step = getattr(env, "_step_count", None)
-            if step is not None:
-                self.lbl_step.config(text=str(step))
+        step = getattr(env, "_step_count", 0) if env is not None else 0
+
+        if step:
+            self.lbl_time.config(text=f"{now:.4f}")
+            self.lbl_step.config(text=str(step))
+        else:
+            self.lbl_time.config(text="—")
+            self.lbl_step.config(text="—")
 
         current_time = time.time()
         self.tick_count += 1
@@ -1522,9 +1521,11 @@ class Viewer(tk.Tk):
         self.active_animations = []
         gc.collect()
 
-        self.canvas.delete("all")
+        # First pass at scale=1.0 to measure content bounding box
         self.scale = 1.0
-        self.draw_scene(initial=True)
+        self.offset_x = 0
+        self.offset_y = 0
+        self.draw_scene()
         self.update_idletasks()
 
         bbox = self.canvas.bbox("all")
@@ -1545,13 +1546,13 @@ class Viewer(tk.Tk):
             desired_scale = min(desired_scale, 1.0)
             desired_scale = max(desired_scale, 0.1)
 
+        # Second pass at desired_scale to measure scaled bounding box
         self.scale = desired_scale
         self.offset_x = 0
         self.offset_y = 0
-        self.canvas.delete("all")
-        self.draw_scene(initial=True)
-
+        self.draw_scene()
         self.update_idletasks()
+
         bbox_new = self.canvas.bbox("all")
         if bbox_new:
             new_w = bbox_new[2] - bbox_new[0]
@@ -1563,12 +1564,11 @@ class Viewer(tk.Tk):
             content_center_x = bbox_new[0] + new_w / 2
             content_center_y = bbox_new[1] + new_h / 2
 
-            dx = center_x - content_center_x
-            dy = center_y - content_center_y
-            self.canvas.move("all", dx, dy)
-            self.offset_x = dx
-            self.offset_y = dy
-
+            # Update offset and redraw so resource_block_bounds reflects
+            # the final canvas positions (canvas.move would leave them stale)
+            self.offset_x = center_x - content_center_x
+            self.offset_y = center_y - content_center_y
+            self.draw_scene()
             self.obj_coords_cache = weakref.WeakKeyDictionary()
 
     def start_animations(self, transfers, duration_ms, on_complete=None):
@@ -1686,7 +1686,7 @@ class Viewer(tk.Tk):
         now = 0.0
         if hasattr(self, "sim_ctrl") and self.sim_ctrl.env is not None:
             now = self.sim_ctrl.env.now
-        self.lbl_time.config(text=f"{now:.4f}")
+        self.update_time_display(now)
 
         start_x = (50 * self.scale) + self.offset_x
         start_y = (50 * self.scale) + self.offset_y
