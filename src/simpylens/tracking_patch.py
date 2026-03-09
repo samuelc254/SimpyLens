@@ -549,11 +549,15 @@ class TrackedFilterStore(OriginalFilterStore):
 class TrackedEnvironment(simpy.Environment):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._step_count = 0
         _ensure_tracking_state(self)
 
+    @property
+    def step_count(self):
+        """Public accessor for the step counter (use in breakpoints: env.step_count >= N)."""
+        return self._step_count
+
     def step(self):
-        if not hasattr(self, "_step_count"):
-            self._step_count = 0
         self._step_count += 1
 
         _ensure_tracking_state(self)

@@ -375,6 +375,12 @@ class SimulationController:
         random.seed(self.seed)
 
         self.running = False
+
+        # Reset hit statistics of all breakpoints so counts start fresh
+        for bp in self._breakpoints:
+            bp.hit_count = 0
+            bp._last_matched = None
+
         seed = self.seed
         self._emit_event({
             "kind": "SIM",

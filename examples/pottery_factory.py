@@ -9,9 +9,9 @@ Covers:
 
 Scenario:
   A pottery factory produces different types of pots (Vases, Plates, Mugs).
-  The production line consists of molding, glazing, oven firing (in batches), 
-  and final painting. 
-  
+  The production line consists of molding, glazing, oven firing (in batches),
+  and final painting.
+
   The factory uses clay from a depot, which needs to be periodically refilled.
   Pots are finally shipped when finished.
 
@@ -24,13 +24,16 @@ import simpy
 import simpylens
 
 # LOG CONFIGURATION (True = show messages, False = silence)
-VERBOSE = True
+VERBOSE = False
 
 if not VERBOSE:
+
     def print(*args, **kwargs):
         pass
 
+
 total_manufactured = 0
+
 
 def factory(env, molding, glazing, painting, oven, clay_depot, shipping):
     """Main factory process that generates new pots to be processed."""
@@ -45,6 +48,7 @@ def factory(env, molding, glazing, painting, oven, clay_depot, shipping):
         env.process(process_pot(env, current_pot, molding, glazing, oven, painting, clay_depot, shipping))
         pot_id += 1
 
+
 def clay_refill(env, depot):
     """Independent process that periodically refills clay inventory."""
     while True:
@@ -52,6 +56,7 @@ def clay_refill(env, depot):
         if depot.level < 50:
             yield depot.put(40)
             print(f"[{env.now:5.1f}] [System] Clay refill (+40). Stock: {depot.level}")
+
 
 def process_pot(env, pot, molding, glazing, oven, painting, clay_depot, shipping):
     """Process a single pot through the manufacturing steps."""
@@ -135,11 +140,11 @@ def setup(env):
     env.process(factory(env, molding, glazing, painting, oven, clay_depot, shipping))
 
 
-
 lens = simpylens.Lens(model=setup, title="Pottery Factory Simulation")
 lens.add_breakpoint("len(resources['Oven'].items) >= 5", label="Oven Batch Ready", edge="rising", pause_on_hit=False)
 lens.add_breakpoint("resources['Shipping Depot'].level >= 50", edge="rising")
 lens.add_breakpoint("env.now >= 500", edge="rising")
 lens.add_breakpoint("any(item['type'] == 'Mug' for item in resources['Oven'].items)", label="Mug in Oven", edge="rising", pause_on_hit=False)
+lens.add_breakpoint("env.step_count >= 50", label="Step Count Reached", edge="rising")
 
 lens.show()
