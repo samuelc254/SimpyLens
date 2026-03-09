@@ -1,52 +1,68 @@
-# SimpyLens
+# SimpyLens: SimPy Visualization and Debugging Toolkit for Discrete-Event Simulation
 
-simpyLens is a zero-invasion visualization and debugging toolkit for simpy models.
-It helps you inspect simulation behavior visually, without rewriting your business logic.
+SimpyLens is a zero-invasion toolkit for **SimPy model visualization, simulation debugging, and runtime inspection**. It helps you understand queueing behavior, resource contention, and process flow in real time, without rewriting your simulation business logic.
 
-![simpyLens running](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/basic_sim.gif?v=20260302)
+It is designed for developers, researchers, and operations teams building **discrete-event simulation in Python** with SimPy.
 
-## What simpyLens does
+![SimpyLens running](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/basic_sim.gif?v=20260302)
 
-- Visualizes simpy resources and flows in real time.
-- Adds an interactive desktop UI (Tkinter) for run control and inspection.
-- Supports programmatic and UI-driven breakpoints.
-- Preserves your original simulation structure (monkey patching is internal).
+## Why SimpyLens
 
-## Project scope
+- Real-time visualization of SimPy resources and process interactions.
+- Interactive debugger UI for play, pause, step, reset, and speed control.
+- Breakpoint engine with expression/callable conditions, edge modes, and pause behavior.
+- Structured event logs for simulation, resources, step lifecycle, and breakpoints.
+- Headless mode for automated tests and CI usage.
+- Metrics patch for queue wait, usage time, levels, and throughput indicators.
 
-simpyLens focuses on **model understanding, debugging, and presentation** for simpy simulations.
+## Key Features
 
-In scope:
-- Resource-focused visualization (`Resource`, `PriorityResource`, `PreemptiveResource`, `Container`, `Store`, `PriorityStore`, `FilterStore`).
-- Runtime controls (play, pause, step, reset, speed).
-- Breakpoint engine with advanced behavior (`edge`, `pause_on_hit`, callable/expression conditions).
-- Event logs for simulation/resource/breakpoint activity.
+### SimPy Resource Visualization
 
-Out of scope (for now):
-- 3D rendering.
-- Graphical editing of the simulation structure.
+SimpyLens tracks and renders:
+- `Resource`
+- `PriorityResource`
+- `PreemptiveResource`
+- `Container`
+- `Store`
+- `PriorityStore`
+- `FilterStore`
 
-## Requirements
+### Runtime Controls and Debugging
 
-- Python 3.8+
-- simpy 4+
-- Tkinter available in your Python installation (standard in most desktop Python distributions)
+- Play, step, pause, reset.
+- Simulation speed slider.
+- Event timeline logs with search.
+- Breakpoint panel with live hit count and per-row `pause_on_hit` toggle.
+
+### Advanced Breakpoints for Simulation Analysis
+
+- Condition types: Python expression (`str`) or callable.
+- Edge modes: `none`, `rising`, `falling`.
+- Pause behavior: pause or continue on hit.
+- Multiple breakpoint hits in the same simulation step are all counted and logged.
 
 ## Installation
 
-Install from the project root:
+### Requirements
+
+- Python `>=3.8`
+- `simpy>=4.0.0`
+- Tkinter available in your Python installation for GUI mode
+
+### Install from source
 
 ```bash
 pip install .
 ```
 
-Development mode:
+### Development install
 
 ```bash
 pip install -e .
 ```
 
-## Quick start
+## Quick Start (GUI)
 
 ```python
 import simpy
@@ -66,85 +82,62 @@ def setup(env):
     env.process(worker("B"))
 
 
-if __name__ == "__main__":
-    lens = simpylens.Lens(model=setup, title="My Simulation")
-    lens.show()
+lens = simpylens.Lens(model=setup, title="SimPy Machine Shop", gui=True, metrics=True, seed=42)
+lens.show()
+```
+
+## Quick Start (Headless for tests/CI)
+
+```python
+import simpy
+import simpylens
+
+
+def setup(env):
+    server = simpy.Resource(env, capacity=1)
+
+    def client():
+        with server.request() as req:
+            yield req
+            yield env.timeout(5)
+
+    env.process(client())
+
+
+lens = simpylens.Lens(model=setup, gui=False)
+lens.add_breakpoint("env.now >= 5", label="Done", pause_on_hit=True)
+lens.run()
+print(lens.get_logs())
 ```
 
 ## Public API
 
 Main exports:
 - `simpylens.Lens`
+- `simpylens.Breakpoint`
 - `simpylens.TrackingPatch`
 - `simpylens.MetricsPatch`
 
-Metrics patch activation:
-
-```python
-import simpylens
-
-simpylens.MetricsPatch.apply()
-```
-
-Public readonly metrics exposed after applying `MetricsPatch`:
-
-- Access pattern: `resource.metrics.<metric_name>`
-- `Resource`, `PriorityResource`, `PreemptiveResource`:
-`resource.metrics.queue_wait_time_min`, `resource.metrics.queue_wait_time_avg`, `resource.metrics.queue_wait_time_max`, `resource.metrics.usage_time_min`, `resource.metrics.usage_time_avg`, `resource.metrics.usage_time_max`, `resource.metrics.total_acquisitions`, `resource.metrics.idle_time_pct`, `resource.metrics.busy_time_pct`, `resource.metrics.concurrent_users_min`, `resource.metrics.concurrent_users_avg`, `resource.metrics.concurrent_users_max`
-- `Store`, `PriorityStore`, `FilterStore`:
-`resource.metrics.get_wait_time_min`, `resource.metrics.get_wait_time_avg`, `resource.metrics.get_wait_time_max`, `resource.metrics.put_wait_time_min`, `resource.metrics.put_wait_time_avg`, `resource.metrics.put_wait_time_max`, `resource.metrics.total_items_put`, `resource.metrics.total_items_got`, `resource.metrics.level_min`, `resource.metrics.level_avg`, `resource.metrics.level_max`
-- `Container`:
-`resource.metrics.get_wait_time_per_unit_min`, `resource.metrics.get_wait_time_per_unit_avg`, `resource.metrics.get_wait_time_per_unit_max`, `resource.metrics.put_wait_time_per_unit_min`, `resource.metrics.put_wait_time_per_unit_avg`, `resource.metrics.put_wait_time_per_unit_max`, `resource.metrics.total_amount_put`, `resource.metrics.total_amount_got`, `resource.metrics.level_min`, `resource.metrics.level_avg`, `resource.metrics.level_max`
-
-Recommended entrypoint: `Lens`
-
-```python
-lens = simpylens.Lens(model=setup, title="Demo", gui=True, metrics=True)
-lens.run()
-lens.pause()
-lens.step()
-lens.reset()
-```
-
-## Interface guide
-
-### Top controls
-
-- **Play**: starts continuous execution.
-- **Step**: executes one simpy event/tick.
-- **Pause**: pauses execution.
-- **Reset**: recreates environment and reruns `setup(env)`.
-- **Speed slider**: controls pacing of updates/animations.
-
-### Canvas interactions
-
-- Mouse wheel: zoom in/out.
-- Right button drag: pan viewport.
-- Left button drag on resource block: manual reposition.
-- Bottom-right button: center view.
-- Right click on resource block: details popup and return-to-auto-layout option.
-
-### Logs panel
-
-- Toggle visibility (collapse/expand).
-- Enable/disable logging.
-- Clear logs.
-- Search with next/previous navigation.
-- Vertical resize handle.
-
-### Breakpoints panel
-
-- Resizable right-side panel.
-- Collapsible side tab.
-- Columns include id, label, pause flag, hit count, edge mode, and condition.
-- Per-row pause toggle (`pause_on_hit`) directly in the table.
-- Row highlight when simulation pauses due to that breakpoint.
+Core `Lens` methods:
+- `show()`
+- `run()`
+- `pause()`
+- `step()`
+- `reset()`
+- `set_model(model)`
+- `set_seed(seed)`
+- `get_logs()`
+- `set_log_capacity(capacity)`
+- `add_breakpoint(...)`
+- `remove_breakpoint(id)`
+- `clear_breakpoints()`
+- `set_breakpoint_enabled(id, enabled)`
+- `set_breakpoint_pause_on_hit(id, pause_on_hit)`
+- `list_breakpoints()`
 
 ## Breakpoints
 
-Breakpoints can be created from Python and inspected/controlled in the UI.
-
-### Add breakpoint
+Create breakpoints programmatically and manage them from Python or the UI panel.
 
 ```python
 bp_id = lens.add_breakpoint(
@@ -152,98 +145,146 @@ bp_id = lens.add_breakpoint(
     label="Shipping reached 10",
     enabled=True,
     pause_on_hit=True,
-    edge="rising",  # one of: "none", "rising", "falling"
+    edge="rising",  # "none", "rising", or "falling"
 )
 ```
 
-`condition` can be:
+Condition types:
 - `str`: evaluated as expression.
-- `callable`: receives `context` dict and must return truthy/falsy.
+- `callable`: receives a context dictionary and returns truthy/falsy.
 
-If `label` is omitted/empty, it defaults to the condition text.
+Breakpoint expression context includes:
+- `env`: active SimPy environment.
+- `resources`: dictionary of tracked resources by visual name.
+- Named resources directly when discoverable (example: `oven`, `machine`).
 
-### Breakpoint context
-
-Expression/callable context includes:
-- `env`: simpy environment.
-- `resources`: dictionary of named tracked resources.
-- Named resources directly by variable name (when discoverable), for example `oven`, `machine`, etc.
-
-Available safe builtins in expression mode:
+Safe builtins available in expression mode:
 - `abs`, `all`, `any`, `len`, `max`, `min`, `round`, `sum`
 
-### Edge behavior
+## Logs and Event Schema
 
-- `edge="none"`: hits whenever condition is true.
-- `edge="rising"`: hits only on false -> true transition.
-- `edge="falling"`: hits only on true -> false transition.
+SimpyLens emits structured JSON-like events for:
+- `SIM` events (reset, run completion)
+- `STEP` events (before/after)
+- `RESOURCE` events (request, release, put, get)
+- `BREAKPOINT` events (`BREAKPOINT_HIT`, `BREAKPOINT_ERROR`)
 
-### Pause behavior
+All log entries carry a consistent envelope with fields such as:
+- `schema_version`
+- `kind`
+- `event`
+- `time`
+- `level`
+- `source`
+- `message`
+- `data`
 
-- `pause_on_hit=True`: simulation pauses when this breakpoint hits.
-- `pause_on_hit=False`: hit is counted/logged but simulation keeps running.
+## Metrics
 
-You can change this at runtime:
+`MetricsPatch` is enabled by default through `Lens(metrics=True)`.
 
 ```python
-lens.set_breakpoint_pause_on_hit(bp_id, False)
+import simpylens
+
+simpylens.MetricsPatch.apply()
 ```
 
-### Manage breakpoints
+Read-only metrics are exposed through:
+- `resource.metrics.<metric_name>`
 
-```python
-lens.set_breakpoint_enabled(bp_id, True)
-lens.remove_breakpoint(bp_id)
-lens.clear_breakpoints()
-all_bps = lens.list_breakpoints()
-```
+Examples of available metrics:
+- Resource family: queue wait time, usage time, acquisitions/releases, concurrency, idle/busy percentage.
+- Store family: put/get wait time, queue sizes, level statistics, totals.
+- Container family: wait time per unit, queue sizes, level statistics, total amount moved.
 
-### Breakpoint logs
+## User Interface Guide
 
-The logger emits status events such as:
-- `BREAKPOINT_HIT` (includes id, label, condition, hit count, pause_on_hit, edge)
-- `BREAKPOINT_ERROR` (expression/callable evaluation errors)
+### Top Controls
 
-## Running examples
+- `Play`: starts continuous execution.
+- `Step`: executes one SimPy event.
+- `Pause`: pauses execution.
+- `Reset`: recreates environment and runs `setup(env)` again.
+- `Speed`: controls visual pacing.
 
-Examples are available in `examples/` and are grouped by origin:
+### Canvas Interactions
 
-Adapted from SimPy official examples/tutorial lineage:
-- `bank_renege.py` (adapted from SimPy "bank" tutorial family)
-- `gas_station_refueling.py` (adapted from SimPy gas station refuel example)
+- Mouse wheel to zoom.
+- Right button drag to pan.
+- Left button drag on resource blocks to reposition.
+- Right click on resource for details and layout options.
+
+### Log Panel
+
+- Collapse/expand, clear, and enable/disable logging.
+- Text search with next/previous navigation.
+- Vertical resize handle.
+
+### Breakpoint Panel
+
+- Resizable right-side panel.
+- Collapsible side tab.
+- Columns: id, label, pause, hits, edge, condition.
+- Live highlight for paused/hit breakpoints.
+
+## SimPy Examples Included
+
+Examples are in `examples/` and grouped by origin.
+
+Adapted from official SimPy examples/tutorial lineage:
+- `examples/bank_renege.py`
+- `examples/gas_station_refueling.py`
 
 Original SimpyLens examples:
-- `pottery_factory.py`
-- `wafer_fabrication.py`
+- `examples/pottery_factory.py`
+- `examples/wafer_fabrication.py`
 
-Credits:
-- SimPy project and documentation: https://simpy.readthedocs.io/
-- SimpyLens adaptations and original examples: project maintainers
+## Project Metadata
 
-From project root:
+- Package: `simpylens`
+- Current version: `0.1.4`
+- Python support: `>=3.8`
+- License: MIT
+- Repository: `https://github.com/samuelc254/simpylens`
+- Issues: `https://github.com/samuelc254/simpylens/issues`
 
-```bash
-python examples/pottery_factory.py
-```
+## Limitations
 
-## Limitations and notes
+- Current scope is 2D resource/process visualization, not 3D simulation rendering.
+- GUI rendering can become the bottleneck at very high event throughput.
+- Keep breakpoint expressions lightweight for best runtime performance.
 
-- Visualization is tied to tracked simpy primitives and discovered names.
-- Very high event rates can make GUI rendering the bottleneck.
-- Breakpoint expressions should stay lightweight for best runtime performance.
+## FAQ
+
+### Is SimpyLens a SimPy debugger?
+
+Yes. SimpyLens provides breakpoint-based debugging, structured event logs, and step-by-step runtime inspection for SimPy simulations.
+
+### Can I visualize SimPy resources in real time?
+
+Yes. SimpyLens visualizes `Resource`, `Container`, and `Store` families, including queue/load behavior and process flow.
+
+### Can SimpyLens run in headless mode for automated testing?
+
+Yes. Use `Lens(gui=False)` to run simulations and assertions in tests or CI pipelines.
+
+### Does SimpyLens require rewriting my simulation model?
+
+No. SimpyLens is designed for low-intrusion integration with your existing SimPy setup function.
 
 ## Contributing
 
 Contributions are welcome.
 
 Suggested workflow:
-- Fork and create a feature branch.
-- Add/adjust examples when behavior changes.
-- Keep public API changes documented in this README.
+1. Fork the repository.
+2. Create a feature branch.
+3. Add or update tests and examples.
+4. Submit a pull request with a clear change description.
 
 ## Credits
 
-simpyLens is built on top of the [simpy](https://simpy.readthedocs.io/) library, an open-source discrete-event simulation framework for Python.  
+SimpyLens is built on top of [SimPy](https://simpy.readthedocs.io/), the open-source discrete-event simulation framework for Python.
 
 ## License
 
