@@ -1,8 +1,28 @@
+"""Pottery Factory Example.
+
+Origin:
+    Original SimpyLens example.
+
+Credits:
+    - SimpyLens maintainers.
+
+Covers:
+    - Resource usage (`simpy.Resource`)
+    - Store usage (`simpy.Store`) with batch firing logic
+    - Container usage (`simpy.Container`) for bulk inventory
+    - Runtime breakpoints in SimpyLens
+
+Scenario:
+    A pottery factory produces vases, plates, and mugs. Items go through molding,
+    glazing, oven firing in batches, painting, and shipping. Clay inventory is
+    periodically refilled to keep production running.
+"""
+
+import random
 import simpy
 import simpylens
-import random
 
-# LOG CONFIGURATION (True = show messages, False = silence)
+# Log configuration (True = show messages, False = silence).
 VERBOSE = False
 
 if not VERBOSE:
@@ -14,21 +34,8 @@ if not VERBOSE:
 total_manufactured = 0
 
 
-def factory(env):
-    global total_manufactured
-
-    # --- RESOURCES (MACHINES AND OPERATORS) ---
-    molding = simpy.Resource(env, capacity=3)
-    glazing = simpy.Resource(env, capacity=2)
-    painting = simpy.Resource(env, capacity=2)
-
-    # --- STORE (BATCH PROCESS) ---
-    oven = simpy.Store(env, capacity=5)
-
-    # --- CONTAINERS (BULK INVENTORY) ---
-    clay_depot = simpy.Container(env, capacity=100, init=20)
-    shipping = simpy.Container(env, capacity=1000, init=0)
-
+def factory(env, molding, glazing, painting, oven, clay_depot, shipping):
+    """Main factory process that generates new pots to be processed."""
     env.process(clay_refill(env, clay_depot))
 
     pot_id = 1
@@ -47,33 +54,30 @@ def clay_refill(env, depot):
         yield env.timeout(15)
         if depot.level < 50:
             yield depot.put(40)
-            print(f"[System] Clay refill (+40). Stock: {depot.level}")
+            print(f"[{env.now:5.1f}] [System] Clay refill (+40). Stock: {depot.level}")
 
 
 def process_pot(env, pot, molding, glazing, oven, painting, clay_depot, shipping):
+    """Process a single pot through the manufacturing steps."""
     global total_manufactured
     pot_id = pot["id"]
 
-    # --- STEP 1: MOLDING (consumes clay) ---
+    # Step 1: molding (consumes clay).
     yield clay_depot.get(2)
     with molding.request() as req:
         yield req
         mold_time = random.uniform(3, 5)
         yield env.timeout(mold_time)
 
-    # --- STEP 2: GLAZING ---
+    # Step 2: glazing.
     with glazing.request() as req:
         yield req
         yield env.timeout(2)
 
-    # --- STEP 3: OVEN (batch) ---
+    # Step 3: oven firing (batch).
     yield oven.put(pot)
     if len(oven.items) >= 5:
-        print("[Oven] Starting batch firing with 5 items.")
-
-        for item in oven.items:
-            print(f"  - Item {item['id']} ({item['type']}) in batch.")
-
+        print(f"[{env.now:5.1f}] [Oven] Starting batch firing with 5 items.")
         yield env.timeout(10)
 
         if hasattr(oven, "finished_firing"):
@@ -97,29 +101,50 @@ def process_pot(env, pot, molding, glazing, oven, painting, clay_depot, shipping
         yield oven.finished_firing
         yield oven.batch_ready_event
 
-    # --- STEP 4: FINAL PAINTING ---
+    # Step 4: final painting.
     with painting.request() as req:
         yield req
         yield env.timeout(2)
 
-    # --- STEP 5: SHIPPING ---
+    # Step 5: shipping.
     yield shipping.put(1)
 
     total_manufactured += 1
-    print(f"[Pot {pot_id}] COMPLETED and stocked. (Total: {total_manufactured})")
+    print(f"[{env.now:5.1f}] [Pot {pot_id}] COMPLETED and stocked. (Total: {total_manufactured})")
 
 
 def setup(env):
-    env.process(factory(env))
+    """Setup function for SimpyLens. Instantiates resources and starts the factory."""
+    # Resources: machines and operators.
+    molding = simpy.Resource(env, capacity=3)
+    glazing = simpy.Resource(env, capacity=2)
+    painting = simpy.Resource(env, capacity=2)
+
+    # Store for the oven batch process.
+    oven = simpy.Store(env, capacity=5)
+
+    # Containers for bulk inventory.
+    clay_depot = simpy.Container(env, capacity=100, init=20)
+    shipping = simpy.Container(env, capacity=1000, init=0)
+
+    # Resource labels for clearer SimpyLens visualization.
+    molding.visual_name = "Molding Station"
+    glazing.visual_name = "Glazing Station"
+    painting.visual_name = "Painting Station"
+    oven.visual_name = "Oven"
+    clay_depot.visual_name = "Clay Depot"
+    shipping.visual_name = "Shipping Depot"
+
+    # Start the factory process.
+    env.process(factory(env, molding, glazing, painting, oven, clay_depot, shipping))
 
 
-if __name__ == "__main__":
-    lens = simpylens.Lens(model=setup)
+lens = simpylens.Lens(model=setup, title="Pottery Factory Simulation")
 
-    lens.add_breakpoint("len(oven.items) >= 5", label="Oven Batch Ready", edge="rising")
-    lens.add_breakpoint("shipping.level >= 10", edge="rising")
-    lens.add_breakpoint("env.now >= 50", edge="rising")
-    lens.add_breakpoint("any(item['type'] == 'Mug' for item in oven.items)", label="Mug in Oven", edge="rising")
-    # lens.add_breakpoint("a==b")
+lens.add_breakpoint("any(item['type'] == 'Mug' for item in resources['Oven'].items)", label="Mug in Oven", edge="none", pause_on_hit=False)
+lens.add_breakpoint("len(resources['Oven'].items) >= 5", label="Oven Batch Ready", edge="rising", pause_on_hit=False)
+lens.add_breakpoint("resources['Shipping Depot'].level >= 50", label="Shipping Depot Full", edge="rising", pause_on_hit=False)
+lens.add_breakpoint("env.step_count >= 1000", label="Step Count Reached", edge="rising")
+lens.add_breakpoint("env.now >= 200", label="Time Limit Reached", edge="rising")
 
-    lens.show()
+lens.show()

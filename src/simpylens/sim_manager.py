@@ -56,27 +56,40 @@ class _LogBuffer:
                 payload = {
                     "kind": "STATUS",
                     "event": "MESSAGE",
+                    "level": "INFO",
+                    "source": "lens",
                     "message": message,
+                    "data": None,
                 }
         else:
             payload = {
                 "kind": "STATUS",
                 "event": "MESSAGE",
+                "level": "INFO",
+                "source": "lens",
                 "message": str(message),
+                "data": None,
             }
 
         event = dict(payload)
-        if "data" not in event and "detail" in event:
-            event["data"] = event.get("detail")
 
+        # Ensure required envelope fields exist
         event.setdefault("schema_version", "1.0")
         event.setdefault("kind", "STATUS")
-        event.setdefault("event", "UNKNOWN")
+        event.setdefault("event", "MESSAGE")
         event.setdefault("level", "INFO")
         event.setdefault("source", "lens")
+        event.setdefault("message", "")
+        event.setdefault("data", None)
 
         if "time" not in event:
             event["time"] = float(now) if now is not None else 0.0
+
+        # Strip legacy fields that no longer belong in the schema
+        event.pop("detail", None)
+        event.pop("phase", None)
+        event.pop("step", None)
+        event.pop("action", None)
 
         event["seq"] = self._next_seq
         self._next_seq += 1
@@ -239,6 +252,8 @@ class SimulationController:
             return None
 
         context = self._build_breakpoint_context()
+        hit_events = []
+        should_pause = False
 
         for breakpoint in self._breakpoints:
             if not breakpoint.enabled:
@@ -251,15 +266,18 @@ class SimulationController:
                 err_text = f"{type(exc).__name__}: {exc}"
                 self._emit_event(
                     {
-                        "kind": "STATUS",
+                        "kind": "BREAKPOINT",
                         "event": "BREAKPOINT_ERROR",
                         "time": self.env.now,
-                        "breakpoint_id": breakpoint.id,
-                        "label": breakpoint.label,
-                        "condition": breakpoint.expression,
-                        "expression": breakpoint.expression,
-                        "error": err_text,
                         "level": "ERROR",
+                        "source": "lens",
+                        "message": f"Breakpoint error: {breakpoint.label or breakpoint.expression}",
+                        "data": {
+                            "breakpoint_id": breakpoint.id,
+                            "label": breakpoint.label,
+                            "condition": breakpoint.expression,
+                            "error": err_text,
+                        },
                     }
                 )
                 breakpoint.last_error = err_text
@@ -271,24 +289,52 @@ class SimulationController:
                 continue
 
             breakpoint.record_hit()
+            hit_label = breakpoint.label or breakpoint.expression
+            hit_data = {
+                "breakpoint_id": breakpoint.id,
+                "label": breakpoint.label,
+                "condition": breakpoint.expression,
+                "hit_count": breakpoint.hit_count,
+                "pause_on_hit": breakpoint.pause_on_hit,
+                "edge": breakpoint.edge,
+            }
             event = {
                 "breakpoint_id": breakpoint.id,
                 "label": breakpoint.label,
                 "condition": breakpoint.expression,
-                "expression": breakpoint.expression,
                 "time": self.env.now,
                 "hit_count": breakpoint.hit_count,
                 "pause_on_hit": breakpoint.pause_on_hit,
                 "edge": breakpoint.edge,
             }
 
-            self._emit_event({"kind": "STATUS", "event": "BREAKPOINT_HIT", **event})
+            self._emit_event(
+                {
+                    "kind": "BREAKPOINT",
+                    "event": "BREAKPOINT_HIT",
+                    "time": self.env.now,
+                    "level": "INFO",
+                    "source": "lens",
+                    "message": f"Breakpoint hit: {hit_label} (hits={breakpoint.hit_count})",
+                    "data": hit_data,
+                }
+            )
+            event["step"] = getattr(self.env, "step_count", None)
             if self.on_breakpoint_cb:
                 try:
                     self.on_breakpoint_cb(event)
                 except Exception:
                     pass
-            return event
+
+            hit_events.append(event)
+            if breakpoint.pause_on_hit:
+                should_pause = True
+
+        if hit_events:
+            return {
+                "hits": hit_events,
+                "pause": should_pause,
+            }
 
         return None
 
@@ -343,7 +389,24 @@ class SimulationController:
         random.seed(self.seed)
 
         self.running = False
-        self._emit_event({"kind": "STATUS", "event": "RESET", "time": 0.0})
+
+        # Reset hit statistics of all breakpoints so counts start fresh
+        for bp in self._breakpoints:
+            bp.hit_count = 0
+            bp._last_matched = None
+
+        seed = self.seed
+        self._emit_event(
+            {
+                "kind": "SIM",
+                "event": "RESET",
+                "time": 0.0,
+                "level": "INFO",
+                "source": "lens",
+                "message": f"Simulation reset with seed {seed}",
+                "data": {"seed": seed},
+            }
+        )
 
         if not self._model:
             self.env = None
@@ -400,8 +463,8 @@ class SimulationController:
                     self._emit_logs(list(step_logs))
                     step_logs.clear()
 
-                breakpoint_event = self._check_breakpoints()
-                if breakpoint_event and breakpoint_event.get("pause_on_hit", True):
+                breakpoint_result = self._check_breakpoints()
+                if breakpoint_result and breakpoint_result.get("pause", False):
                     return
 
                 pending_transfers = self._pending_transfers()
@@ -412,6 +475,50 @@ class SimulationController:
                     self.start_animations_cb(transfers, delay_ms)
         except simpy.core.EmptySchedule:
             pass
+
+    def run_headless(self):
+        if not self._model:
+            return
+
+        if self.env is None:
+            self.reset()
+
+        self.running = True
+        while self.running and self.env.peek() != simpy.core.Infinity:
+            try:
+                self.env.step()
+                self.update_time_cb(self.env.now)
+
+                # Process logs
+                step_logs = self._step_logs()
+                if step_logs:
+                    self._emit_logs(list(step_logs))
+                    step_logs.clear()
+
+                breakpoint_result = self._check_breakpoints()
+                if breakpoint_result and breakpoint_result.get("pause", False):
+                    self.running = False
+                    return
+
+                pending_transfers = self._pending_transfers()
+                if pending_transfers:
+                    pending_transfers.clear()
+            except simpy.core.EmptySchedule:
+                self.running = False
+                break
+
+        self.running = False
+        self._emit_event(
+            {
+                "kind": "SIM",
+                "event": "RUN_COMPLETE",
+                "time": self.env.now if self.env is not None else 0.0,
+                "level": "INFO",
+                "source": "lens",
+                "message": "Simulation complete",
+                "data": None,
+            }
+        )
 
     def pause(self):
         self.running = False
@@ -457,8 +564,8 @@ class SimulationController:
             self._emit_logs(list(step_logs))
             step_logs.clear()
 
-        breakpoint_event = self._check_breakpoints()
-        if breakpoint_event and breakpoint_event.get("pause_on_hit", True):
+        breakpoint_result = self._check_breakpoints()
+        if breakpoint_result and breakpoint_result.get("pause", False):
             self.running = False
             return
 
@@ -557,6 +664,15 @@ class Lens:
             self._sim_ctrl.set_model(model)
 
     def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
+        if self.viewer is not None:
+            return self.viewer.add_breakpoint(
+                condition=condition,
+                label=label,
+                enabled=enabled,
+                pause_on_hit=pause_on_hit,
+                edge=edge,
+            )
+
         return self._sim_ctrl.add_breakpoint(
             condition=condition,
             label=label,
@@ -594,7 +710,10 @@ class Lens:
         if self._sim_ctrl is None:
             return
         self._sim_ctrl.set_model(self._model)
-        self._sim_ctrl.run()
+        if self._gui:
+            self._sim_ctrl.run()
+        else:
+            self._sim_ctrl.run_headless()
 
     def pause(self):
         if self._sim_ctrl is None:

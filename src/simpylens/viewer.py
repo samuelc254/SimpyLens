@@ -77,12 +77,13 @@ class Viewer(tk.Tk):
         self.breakpoint_panel_collapsed = False
         self.breakpoint_panel_width = 320
         self.breakpoint_panel_min_width = 220
-        self.breakpoint_panel_max_width = 560
+        self.breakpoint_panel_max_width = 1100
         self.breakpoint_resize_start_x = None
         self.breakpoint_resize_start_width = 0
         self.breakpoint_row_cache = []
         self._breakpoint_refresh_job = None
-        self.paused_breakpoint_id = None
+        self.paused_breakpoint_ids = set()
+        self.last_breakpoint_hit_step = None
 
         self._setup_top_bar()
         self.main_area = ttk.Frame(self)
@@ -103,7 +104,10 @@ class Viewer(tk.Tk):
             seed=42 if seed is None else seed,
         )
 
+        # Define deterministic initial state before the breakpoint panel is rendered.
+        self._reset_breakpoint_panel_initial_state()
         self._setup_breakpoint_panel()
+        self._apply_breakpoint_panel_state()
         self._refresh_breakpoint_panel()
 
         if self.current_model:
@@ -215,8 +219,26 @@ class Viewer(tk.Tk):
             command=self.on_reset_click,
         ).pack(side=tk.LEFT, padx=2)
 
-        self.lbl_time = ttk.Label(bar, text="Time: 0.00", font=("Consolas", 14, "bold"))
-        self.lbl_time.pack(side=tk.LEFT, padx=20)
+        # --- Time + Step display panel ---
+        info_frame = ttk.Frame(bar, relief="groove", padding=(8, 4))
+        info_frame.pack(side=tk.LEFT, padx=16)
+
+        # Time
+        time_block = ttk.Frame(info_frame)
+        time_block.pack(side=tk.LEFT, padx=(0, 16))
+        ttk.Label(time_block, text="TIME", font=("Segoe UI", 7), foreground="#888").pack(side=tk.LEFT, padx=(0, 5))
+        self.lbl_time = ttk.Label(time_block, text="—", font=("Consolas", 12, "bold"))
+        self.lbl_time.pack(side=tk.LEFT)
+
+        # Separator
+        ttk.Separator(info_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=(0, 16), pady=2)
+
+        # Step
+        step_block = ttk.Frame(info_frame)
+        step_block.pack(side=tk.LEFT)
+        ttk.Label(step_block, text="STEP", font=("Segoe UI", 7), foreground="#888").pack(side=tk.LEFT, padx=(0, 5))
+        self.lbl_step = ttk.Label(step_block, text="—", font=("Consolas", 12, "bold"))
+        self.lbl_step.pack(side=tk.LEFT)
 
         spd_frame = ttk.Frame(bar)
         spd_frame.pack(side=tk.LEFT, padx=20)
@@ -229,37 +251,52 @@ class Viewer(tk.Tk):
         self.lbl_speed_val.pack(side=tk.LEFT, padx=(5, 0))
 
     def on_play_click(self):
-        self.paused_breakpoint_id = None
+        self.paused_breakpoint_ids.clear()
+        self.last_breakpoint_hit_step = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.set_model(self.current_model)
         self.sim_ctrl.run()
 
     def on_step_click(self):
-        self.paused_breakpoint_id = None
+        self.paused_breakpoint_ids.clear()
+        self.last_breakpoint_hit_step = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.set_model(self.current_model)
         self.sim_ctrl.run_single_step()
 
     def on_reset_click(self):
-        self.paused_breakpoint_id = None
+        self.paused_breakpoint_ids.clear()
+        self.last_breakpoint_hit_step = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.reset(self.current_model)
         self.after(100, self.center_view)
 
     def _on_breakpoint_hit(self, event):
         self.last_breakpoint_hit = dict(event)
-        if event.get("pause_on_hit", True):
-            self.paused_breakpoint_id = event.get("breakpoint_id")
-            self._refresh_breakpoint_panel(force=True, reschedule=False)
+        step = event.get("step")
+        if step is not None and step != self.last_breakpoint_hit_step:
+            self.paused_breakpoint_ids.clear()
+            self.last_breakpoint_hit_step = step
+
+        breakpoint_id = event.get("breakpoint_id")
+        if breakpoint_id is not None:
+            self.paused_breakpoint_ids.add(int(breakpoint_id))
+
+        self._refresh_breakpoint_panel(force=True, reschedule=False)
 
     def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
-        return self.sim_ctrl.add_breakpoint(
+        breakpoint_id = self.sim_ctrl.add_breakpoint(
             condition=condition,
             label=label,
             enabled=enabled,
             pause_on_hit=pause_on_hit,
             edge=edge,
         )
+        if self.breakpoint_panel_collapsed and self._has_defined_breakpoints():
+            self.breakpoint_panel_collapsed = False
+            self._apply_breakpoint_panel_state()
+        self._refresh_breakpoint_panel(force=True, reschedule=False)
+        return breakpoint_id
 
     def remove_breakpoint(self, breakpoint_id):
         return self.sim_ctrl.remove_breakpoint(breakpoint_id)
@@ -277,8 +314,16 @@ class Viewer(tk.Tk):
         return self.sim_ctrl.list_breakpoints()
 
     def update_time_display(self, now):
-        """Updates time label and calculates ticks/s in the interface."""
-        self.lbl_time.config(text=f"Time: {now:.2f}")
+        """Updates time label, step label and calculates ticks/s in the interface."""
+        env = getattr(self.sim_ctrl, "env", None)
+        step = getattr(env, "_step_count", 0) if env is not None else 0
+
+        if step:
+            self.lbl_time.config(text=f"{now:.4f}")
+            self.lbl_step.config(text=str(step))
+        else:
+            self.lbl_time.config(text="—")
+            self.lbl_step.config(text="—")
 
         current_time = time.time()
         self.tick_count += 1
@@ -427,6 +472,38 @@ class Viewer(tk.Tk):
         self.breakpoint_tree.bind("<Button-1>", self._on_breakpoint_tree_click)
         bp_scroll.config(command=self.breakpoint_tree.yview)
 
+    def _has_defined_breakpoints(self):
+        if not hasattr(self, "sim_ctrl") or self.sim_ctrl is None:
+            return False
+        return bool(self.sim_ctrl.list_breakpoints())
+
+    def _reset_breakpoint_panel_initial_state(self):
+        # Keep initial state stable and predictable before first render.
+        self.paused_breakpoint_ids.clear()
+        self.last_breakpoint_hit_step = None
+        self.breakpoint_row_cache = []
+        self.breakpoint_panel_collapsed = not self._has_defined_breakpoints()
+
+    def _apply_breakpoint_panel_state(self):
+        if not hasattr(self, "breakpoint_panel"):
+            return
+
+        self.breakpoint_content.pack_forget()
+        self.breakpoint_inner.pack_forget()
+        self.breakpoint_resize_handle.pack_forget()
+        self.breakpoint_tab.pack_forget()
+
+        if self.breakpoint_panel_collapsed:
+            self.breakpoint_tab.pack(side=tk.RIGHT, fill=tk.Y)
+            self._redraw_breakpoint_tab()
+            self.btn_toggle_breakpoint_panel.config(text="◀")
+            return
+
+        self.breakpoint_resize_handle.pack(side=tk.LEFT, fill=tk.Y)
+        self.breakpoint_inner.pack(side=tk.LEFT, fill=tk.Y)
+        self.breakpoint_content.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=(0, 6))
+        self.btn_toggle_breakpoint_panel.config(text="▶")
+
     def _redraw_breakpoint_tab(self, _event=None):
         if not hasattr(self, "breakpoint_tab"):
             return
@@ -446,20 +523,8 @@ class Viewer(tk.Tk):
         )
 
     def toggle_breakpoint_panel(self):
-        if self.breakpoint_panel_collapsed:
-            self.breakpoint_tab.pack_forget()
-            self.breakpoint_resize_handle.pack(side=tk.LEFT, fill=tk.Y)
-            self.breakpoint_inner.pack(side=tk.LEFT, fill=tk.Y)
-            self.breakpoint_content.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=(0, 6))
-            self.btn_toggle_breakpoint_panel.config(text="▶")
-            self.breakpoint_panel_collapsed = False
-        else:
-            self.breakpoint_content.pack_forget()
-            self.breakpoint_inner.pack_forget()
-            self.breakpoint_resize_handle.pack_forget()
-            self.breakpoint_tab.pack(side=tk.RIGHT, fill=tk.Y)
-            self._redraw_breakpoint_tab()
-            self.breakpoint_panel_collapsed = True
+        self.breakpoint_panel_collapsed = not self.breakpoint_panel_collapsed
+        self._apply_breakpoint_panel_state()
 
     def _start_breakpoint_resize(self, event):
         self.breakpoint_resize_start_x = event.x_root
@@ -559,7 +624,7 @@ class Viewer(tk.Tk):
                 tags = ()
                 if model["has_error"]:
                     tags = ("bp_error",)
-                elif self.paused_breakpoint_id == row_id:
+                elif row_id in self.paused_breakpoint_ids:
                     tags = ("bp_paused",)
                 values = (model["id"], model["label"], model["pause"], model["hits"], model["edge"], model["condition"])
                 self.breakpoint_tree.insert("", tk.END, iid=iid, values=values, tags=tags)
@@ -707,70 +772,86 @@ class Viewer(tk.Tk):
         if not isinstance(payload, dict):
             return str(payload)
 
-        kind = payload.get("kind")
+        kind = payload.get("kind", "")
+        event = payload.get("event", "")
+        timestamp = float(payload.get("time", 0.0))
+        message = payload.get("message", "")
+        data = payload.get("data") or {}
 
-        if kind == "RESOURCE":
-            timestamp = float(payload.get("time", 0.0))
-            process_name = payload.get("process", "?")
-            action = payload.get("action", "?")
-            origin = payload.get("from", "?")
-            destination = payload.get("to", "?")
-            detail = payload.get("detail")
+        def _trunc(text, limit=100):
+            text = str(text)
+            return text if len(text) <= limit else text[:limit] + "..."
 
-            if action == "release":
-                base = f"[{timestamp:.2f}] [RESOURCE] {process_name} released '{origin}' -> {destination}"
-            else:
-                base = f"[{timestamp:.2f}] [RESOURCE] {process_name} {action} {origin} -> {destination}"
+        # --- SIM ---
+        if kind == "SIM":
+            return f"[{timestamp:.2f}] [SIM] {message}"
 
-            if detail is not None:
-                return f"{base} | {json.dumps(detail, ensure_ascii=False, sort_keys=True)}"
-            return base
-
+        # --- STEP ---
         if kind == "STEP":
-            timestamp = float(payload.get("time", 0.0))
-            step = payload.get("step", "?")
-            phase = payload.get("phase", "?")
-            detail = payload.get("detail") or {}
-
-            if phase == "before":
-                event = detail.get("event", "?")
+            if event == "STEP_BEFORE":
+                step = data.get("step", "?")
+                sim_ev = data.get("sim_event", "?")
                 extras = []
-                if "resource" in detail:
-                    extras.append(f"resource={detail['resource']}")
-                if "process" in detail:
-                    extras.append(f"process={detail['process']}")
-                if "delay" in detail:
-                    extras.append(f"delay={detail['delay']}")
-                if "triggering" in detail:
-                    extras.append(f"triggering={','.join(detail['triggering'])}")
-                suffix = f" | {' | '.join(extras)}" if extras else ""
-                return f"[{timestamp:.2f}] [before] [STEP {step}] event={event}{suffix}"
+                if "triggering" in data:
+                    extras.append(f"triggering={','.join(data['triggering'])}")
+                if "delay" in data:
+                    extras.append(f"delay={data['delay']}")
+                if "resource" in data:
+                    extras.append(f"resource={data['resource']}")
+                if "process" in data and "triggering" not in data:
+                    extras.append(f"process={data['process']}")
+                suffix = " | " + " | ".join(extras) if extras else ""
+                return f"[{timestamp:.2f}] [STEP \u25b6 {step}] {sim_ev}{suffix}"
 
-            if phase == "after":
-                active_process = detail.get("active_process", "-")
-                return f"[{timestamp:.2f}] [after] [STEP {step}] running={active_process}"
+            if event == "STEP_AFTER":
+                step = data.get("step", "?")
+                active = data.get("active_process", "-")
+                return f"[{timestamp:.2f}] [STEP \u25c4 {step}] active={active}"
 
-        if kind == "STATUS":
-            event = payload.get("event", "UNKNOWN")
+            return f"[{timestamp:.2f}] [STEP] {message}"
+
+        # --- RESOURCE ---
+        if kind == "RESOURCE":
+            process_name = data.get("process", "?")
+            resource_name = data.get("resource", "?")
+            from_name = data.get("from", "?")
+            to_name = data.get("to", "?")
+            extras = []
+            if "amount" in data:
+                extras.append(f"amount={data['amount']}")
+            if "item" in data:
+                extras.append(f"item={_trunc(data['item'], 40)}")
+            if "filter" in data:
+                extras.append(f"filter={_trunc(data['filter'], 40)}")
+            suffix = " | " + " | ".join(extras) if extras else ""
+            move = f"({from_name} \u2192 {to_name})"
+            if message:
+                return f"[{timestamp:.2f}] [RESOURCE] {message}  {move}{suffix}"
+            return f"[{timestamp:.2f}] [RESOURCE] {process_name} {event.lower()} {resource_name}  {move}{suffix}"
+
+        # --- BREAKPOINT ---
+        if kind == "BREAKPOINT":
+            label = data.get("label") or data.get("condition", "-")
+            condition = data.get("condition", "-")
             if event == "BREAKPOINT_HIT":
-                label = payload.get("label", "-")
-                condition = payload.get("condition") or payload.get("expression", "-")
-                hit_count = payload.get("hit_count", "?")
-                timestamp = float(payload.get("time", 0.0))
+                hit_count = data.get("hit_count", "?")
+                cond_str = _trunc(condition, 80)
                 if str(label) == str(condition):
-                    return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_HIT | condition={condition} | hits={hit_count}"
-                return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_HIT | label={label} | condition={condition} | hits={hit_count}"
+                    return f"[{timestamp:.2f}] [BREAKPOINT \u25cf] {cond_str} | hits={hit_count}"
+                return f"[{timestamp:.2f}] [BREAKPOINT \u25cf] {label} | condition={cond_str} | hits={hit_count}"
 
             if event == "BREAKPOINT_ERROR":
-                label = payload.get("label", "-")
-                condition = payload.get("condition") or payload.get("expression", "-")
-                error_text = payload.get("error", "-")
-                timestamp = float(payload.get("time", 0.0))
+                error_text = _trunc(data.get("error", "-"), 80)
+                cond_str = _trunc(condition, 60)
                 if str(label) == str(condition):
-                    return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_ERROR | condition={condition} | error={error_text}"
-                return f"[{timestamp:.2f}] [STATUS] BREAKPOINT_ERROR | label={label} | condition={condition} | error={error_text}"
+                    return f"[{timestamp:.2f}] [BREAKPOINT \u2717] {cond_str} | error={error_text}"
+                return f"[{timestamp:.2f}] [BREAKPOINT \u2717] {label} | condition={cond_str} | error={error_text}"
 
-            return f"[STATUS] {event}"
+            return f"[{timestamp:.2f}] [BREAKPOINT] {message}"
+
+        # --- STATUS / fallback ---
+        if message:
+            return f"[{timestamp:.2f}] [STATUS] {message}"
 
         return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
@@ -1479,9 +1560,11 @@ class Viewer(tk.Tk):
         self.active_animations = []
         gc.collect()
 
-        self.canvas.delete("all")
+        # First pass at scale=1.0 to measure content bounding box
         self.scale = 1.0
-        self.draw_scene(initial=True)
+        self.offset_x = 0
+        self.offset_y = 0
+        self.draw_scene()
         self.update_idletasks()
 
         bbox = self.canvas.bbox("all")
@@ -1502,13 +1585,13 @@ class Viewer(tk.Tk):
             desired_scale = min(desired_scale, 1.0)
             desired_scale = max(desired_scale, 0.1)
 
+        # Second pass at desired_scale to measure scaled bounding box
         self.scale = desired_scale
         self.offset_x = 0
         self.offset_y = 0
-        self.canvas.delete("all")
-        self.draw_scene(initial=True)
-
+        self.draw_scene()
         self.update_idletasks()
+
         bbox_new = self.canvas.bbox("all")
         if bbox_new:
             new_w = bbox_new[2] - bbox_new[0]
@@ -1520,12 +1603,11 @@ class Viewer(tk.Tk):
             content_center_x = bbox_new[0] + new_w / 2
             content_center_y = bbox_new[1] + new_h / 2
 
-            dx = center_x - content_center_x
-            dy = center_y - content_center_y
-            self.canvas.move("all", dx, dy)
-            self.offset_x = dx
-            self.offset_y = dy
-
+            # Update offset and redraw so resource_block_bounds reflects
+            # the final canvas positions (canvas.move would leave them stale)
+            self.offset_x = center_x - content_center_x
+            self.offset_y = center_y - content_center_y
+            self.draw_scene()
             self.obj_coords_cache = weakref.WeakKeyDictionary()
 
     def start_animations(self, transfers, duration_ms, on_complete=None):
@@ -1643,7 +1725,7 @@ class Viewer(tk.Tk):
         now = 0.0
         if hasattr(self, "sim_ctrl") and self.sim_ctrl.env is not None:
             now = self.sim_ctrl.env.now
-        self.lbl_time.config(text=f"Time: {now:.2f}")
+        self.update_time_display(now)
 
         start_x = (50 * self.scale) + self.offset_x
         start_y = (50 * self.scale) + self.offset_y

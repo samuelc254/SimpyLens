@@ -1,21 +1,23 @@
-"""
-Gas Station Refueling example
+"""Gas Station Refueling Example.
+
+Origin:
+    Adapted from the official SimPy example:
+    https://simpy.readthedocs.io/en/latest/examples/gas_station_refuel.html
+
+Credits:
+    - SimPy project and example authors.
+    - SimpyLens adaptation for visualization and breakpoints.
 
 Covers:
-
-- Resources: Resource
-- Resources: Container
-- Waiting for other processes
+    - Resource usage (`simpy.Resource`)
+    - Container usage (`simpy.Container`)
+    - Process coordination (`yield env.process(...)`)
+    - Runtime breakpoints in SimpyLens
 
 Scenario:
-  A gas station has a limited number of gas pumps that share a common
-  fuel reservoir. Cars randomly arrive at the gas station, request one
-  of the fuel pumps and start refueling from that reservoir.
-
-  A gas station control process observes the gas station's fuel level
-  and calls a tank truck for refueling if the station's level drops
-  below a threshold.
-
+    A gas station has a limited number of pumps and a shared fuel reservoir.
+    Cars arrive at random intervals, refuel, and may wait for fuel replenishment
+    by a tank truck when inventory drops below a threshold.
 """
 
 import itertools
@@ -43,7 +45,6 @@ def car(name, env, gas_station, station_tank):
     It requests one of the gas station's fuel pumps and tries to get the
     desired amount of fuel from it. If the station's fuel tank is
     depleted, the car has to wait for the tank truck to arrive.
-
     """
     car_tank_level = random.randint(*CAR_TANK_LEVEL)
     print(f"{env.now:6.1f} s: {name} arrived at gas station")
@@ -89,34 +90,23 @@ def car_generator(env, gas_station, station_tank):
         env.process(car(f"Car {i}", env, gas_station, station_tank))
 
 
-# # Setup and start the simulation
-# print('Gas Station refuelling')
-# random.seed(RANDOM_SEED)
-
-# # Create environment and start processes
-# env = simpy.Environment()
-# gas_station = simpy.Resource(env, 2)
-# station_tank = simpy.Container(env, STATION_TANK_SIZE, init=STATION_TANK_SIZE)
-# env.process(gas_station_control(env, station_tank))
-# env.process(car_generator(env, gas_station, station_tank))
-
-# # Execute!
-# env.run(until=SIM_TIME)
-
-
-def model(env):
+def setup(env):
+    """Setup function for SimpyLens. Instantiates resources and starts the generator."""
     gas_station = simpy.Resource(env, 2)
     station_tank = simpy.Container(env, STATION_TANK_SIZE, init=STATION_TANK_SIZE)
+
+    # Naming resources for better visualization in SimpyLens
+    gas_station.visual_name = "Gas Pumps"
+    station_tank.visual_name = "Station Tank"
 
     env.process(gas_station_control(env, station_tank))
     env.process(car_generator(env, gas_station, station_tank))
 
 
-lens = simpylens.Lens(model=model, seed=RANDOM_SEED, title="Gas Station Refueling Simulation")
+if __name__ == "__main__":
+    lens = simpylens.Lens(model=setup, seed=RANDOM_SEED, title="Gas Station Refueling")
 
-# breakpoint para caso um caminhão tanque chegue
-# analiza se um evento inicialize deu trigger em tank_truck
-lens.add_breakpoint("env.last_event_name == 'Initialize' and env.last_process_name == 'tank_truck'", "Tank truck is on the way!")
+    # Pause execution when the tank truck process is initialized.
+    lens.add_breakpoint("env.last_event_name == 'Initialize' and env.last_process_name == 'tank_truck'", label="Tank truck on the way")
 
-
-lens.show()
+    lens.show()

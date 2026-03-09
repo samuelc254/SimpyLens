@@ -2,14 +2,9 @@
 
 ## Backlog funcional
 
-- adicionar modo headless para rodar a simulação sem interface gráfica, apenas com breakpoints programáticos e logs
-- corrigir gif do readme para rodar em loop (passo futuro)
-- adicionar testes unitários (passo futuro)
 - adicionar rewind step (avaliar a viabilidade) (passo futuro)
-- deixar tamanho do log salvo configurável e adicionar opção de salvar o log em um arquivo
-- adicionar teste de alterar breakpoints com a simulação rodando (passo futuro)
-- adicionar mais metricas de fila, media de itens na fila, min e max (fila de put get e fila de request)
-
+- revizar testes unitários 
+- refatorar readme para assets aparecerem no pypi
 
 ---
 
@@ -258,3 +253,350 @@ def model(env):
 lens = simpylens.Lens(model=model)
 lens.show()
 ```
+
+---
+
+## 8) Novo padrão de logs JSON (v1 — proposta de refatoração)
+
+### Diagnóstico dos problemas no formato atual
+
+O JSON gerado atualmente apresenta os seguintes problemas:
+
+1. **`event` sempre `"UNKNOWN"`** nos logs de tracking: o `tracking_patch.py` emite apenas `kind` sem preencher `event`, então o normalizador usa o fallback `"UNKNOWN"` — campo sem valor semântico real.
+2. **`detail` e `data` redundantes**: o normalizador em `sim_manager.py` copia `detail` para `data` indiscriminadamente, gerando dois campos com o mesmo conteúdo.
+3. **Campos de payload no nível raiz**: logs de `RESOURCE` colocam `action`, `from`, `to`, `process`, `resource` na raiz do objeto junto com os campos obrigatórios (`schema_version`, `seq`, `kind`, etc.), misturando metadados de envelope com dados de evento.
+4. **STEP_AFTER de valor questionável**: o log `phase: "after"` é emitido somente quando o processo ativo difere do esperado, criando uma inconsistência — o usuário não sabe quando esperar esse log.
+5. **`kind: "STATUS"` usado para breakpoints**: `BREAKPOINT_HIT` e `BREAKPOINT_ERROR` deveriam ter `kind: "BREAKPOINT"`, não `"STATUS"`.
+6. **`expression` duplica `condition`**: dois campos com o mesmo valor no payload de breakpoint.
+7. **`source` invariável**: o campo `source` é sempre `"lens"` em todos os eventos, sem distinção real entre quem originou o evento.
+8. **`level` sem uso prático**: todos os logs têm `level: "INFO"` e nunca é usado para filtrar ou estilizar na interface.
+
+---
+
+### Estrutura envelope obrigatória (todos os eventos)
+
+Todo objeto de log deve conter exatamente estes campos de envelope na raiz:
+
+| Campo           | Tipo    | Descrição                                                         |
+|-----------------|---------|-------------------------------------------------------------------|
+| `schema_version`| string  | Versão do esquema. Fixo `"1.0"` na v1.                           |
+| `seq`           | int     | Contador crescente e único por execução (reset no `RESET`).       |
+| `time`          | float   | Tempo da simulação no momento do evento.                          |
+| `kind`          | string  | Categoria alta do evento. Ver tabela de kinds abaixo.             |
+| `event`         | string  | Tipo específico do evento dentro do kind. Ver tabela abaixo.      |
+| `level`         | string  | Severidade: `"DEBUG"`, `"INFO"`, `"WARN"`, `"ERROR"`.            |
+| `source`        | string  | Componente que originou o evento: `"lens"`, `"tracking"`.         |
+| `message`       | string  | Texto curto legível para humano, descrevendo o evento.            |
+| `data`          | object  | Payload específico do evento. Pode ser `null` se não há payload.  |
+
+> Não deve existir nenhum campo de payload fora de `data`. A raiz do objeto é exclusiva dos campos de envelope listados acima.
+
+---
+
+### Tabela de `kind` e `event` v1
+
+| `kind`        | `event`             | Origem         | Descrição                                                       |
+|---------------|---------------------|----------------|-----------------------------------------------------------------|
+| `SIM`         | `RESET`             | `lens`         | Simulação foi reiniciada.                                       |
+| `SIM`         | `RUN_COMPLETE`      | `lens`         | Simulação terminou (fila vazia).                                |
+| `STEP`        | `STEP_BEFORE`       | `tracking`     | Antes de executar um passo do SimPy.                            |
+| `STEP`        | `STEP_AFTER`        | `tracking`     | Após passo, quando o processo ativo mudou inesperadamente.      |
+| `RESOURCE`    | `REQUEST`           | `tracking`     | Processo requisitou um recurso.                                 |
+| `RESOURCE`    | `RELEASE`           | `tracking`     | Processo liberou um recurso.                                    |
+| `RESOURCE`    | `PUT`               | `tracking`     | Processo depositou item/quantidade em Store/Container.          |
+| `RESOURCE`    | `GET`               | `tracking`     | Processo retirou item/quantidade de Store/Container.            |
+| `BREAKPOINT`  | `BREAKPOINT_HIT`    | `lens`         | Condição de breakpoint foi satisfeita.                          |
+| `BREAKPOINT`  | `BREAKPOINT_ERROR`  | `lens`         | Erro ao avaliar condição de breakpoint.                         |
+| `STATUS`      | `MESSAGE`           | `lens`         | Mensagem genérica de texto (fallback para strings livres).      |
+
+---
+
+### Schemas de `data` por evento
+
+#### `SIM / RESET`
+```json
+"data": {
+    "seed": 42
+}
+```
+
+#### `SIM / RUN_COMPLETE`
+```json
+"data": null
+```
+
+#### `STEP / STEP_BEFORE`
+```json
+"data": {
+    "step": 3,
+    "sim_event": "Timeout",
+    "delay": 1.5,
+    "resource": "counter",
+    "process": "customer",
+    "triggering": ["customer", "source"]
+}
+```
+> Campos opcionais: `delay` (só presente em `Timeout`), `resource` (só em eventos de resource), `process` (só em `Process`), `triggering` (lista de nomes de processos esperando o evento). Somente campos aplicáveis ao tipo de evento devem estar presentes.
+
+#### `STEP / STEP_AFTER`
+```json
+"data": {
+    "step": 3,
+    "active_process": "customer"
+}
+```
+> Emitido apenas quando o processo ativo após o passo difere do processo esperado antes. `active_process` é `"-"` se nenhum processo está ativo.
+
+#### `RESOURCE / REQUEST` e `RESOURCE / RELEASE`
+```json
+"data": {
+    "resource": "counter",
+    "process": "customer",
+    "from": "<START>",
+    "to": "counter"
+}
+```
+> `from`/`to` descrevem o movimento do processo no grafo de recursos. `from: "<START>"` quando o processo ainda não estava em nenhum recurso. `to: "<IDLE>"` em releases. Não há dados extras além do movimento.
+
+#### `RESOURCE / PUT` e `RESOURCE / GET`
+```json
+"data": {
+    "resource": "warehouse",
+    "process": "producer",
+    "from": "<START>",
+    "to": "warehouse",
+    "amount": 5
+}
+```
+> `amount` (para `Container`), `item` (para `Store`) e `filter` (para `FilterStore`) vão diretamente em `data` quando presentes. Campos omitidos quando não aplicáveis.
+
+#### `BREAKPOINT / BREAKPOINT_HIT`
+```json
+"data": {
+    "breakpoint_id": 3,
+    "label": "fila cheia",
+    "condition": "len(resources['Queue'].queue) > 5",
+    "hit_count": 2,
+    "pause_on_hit": true,
+    "edge": "rising"
+}
+```
+
+#### `BREAKPOINT / BREAKPOINT_ERROR`
+```json
+"data": {
+    "breakpoint_id": 3,
+    "label": "fila cheia",
+    "condition": "len(resources['Queue'].queue) > 5",
+    "error": "NameError: name 'resources' is not defined"
+}
+```
+
+#### `STATUS / MESSAGE`
+```json
+"data": null
+```
+> `message` no envelope já carrega o texto. `data` é `null`.
+
+---
+
+### Exemplos completos
+
+**RESET:**
+```json
+{
+    "schema_version": "1.0",
+    "seq": 1,
+    "time": 0.0,
+    "kind": "SIM",
+    "event": "RESET",
+    "level": "INFO",
+    "source": "lens",
+    "message": "Simulation reset with seed 42",
+    "data": {"seed": 42}
+}
+```
+
+**STEP_BEFORE:**
+```json
+{
+    "schema_version": "1.0",
+    "seq": 5,
+    "time": 0.0,
+    "kind": "STEP",
+    "event": "STEP_BEFORE",
+    "level": "DEBUG",
+    "source": "tracking",
+    "message": "Step 3: Timeout | triggering=customer",
+    "data": {
+        "step": 3,
+        "sim_event": "Timeout",
+        "delay": 1.5,
+        "triggering": ["customer"]
+    }
+}
+```
+
+**RESOURCE REQUEST:**
+```json
+{
+    "schema_version": "1.0",
+    "seq": 8,
+    "time": 0.0,
+    "kind": "RESOURCE",
+    "event": "REQUEST",
+    "level": "INFO",
+    "source": "tracking",
+    "message": "customer requested counter",
+    "data": {
+        "resource": "counter",
+        "process": "customer",
+        "from": "<START>",
+        "to": "counter"
+    }
+}
+```
+
+**RESOURCE RELEASE:**
+```json
+{
+    "schema_version": "1.0",
+    "seq": 12,
+    "time": 3.86,
+    "kind": "RESOURCE",
+    "event": "RELEASE",
+    "level": "INFO",
+    "source": "tracking",
+    "message": "customer released counter",
+    "data": {
+        "resource": "counter",
+        "process": "customer",
+        "from": "counter",
+        "to": "<IDLE>"
+    }
+}
+```
+
+**BREAKPOINT_HIT:**
+```json
+{
+    "schema_version": "1.0",
+    "seq": 57,
+    "time": 24.0,
+    "kind": "BREAKPOINT",
+    "event": "BREAKPOINT_HIT",
+    "level": "INFO",
+    "source": "lens",
+    "message": "Breakpoint hit: fila cheia (hits=2)",
+    "data": {
+        "breakpoint_id": 3,
+        "label": "fila cheia",
+        "condition": "len(resources['Queue'].queue) > 5",
+        "hit_count": 2,
+        "pause_on_hit": true,
+        "edge": "rising"
+    }
+}
+```
+
+---
+
+## 9) Padrão de exibição dos logs na interface (Viewer)
+
+### Formato visual por kind/event
+
+A interface deve exibir cada log como uma linha de texto formatada, nunca como JSON bruto. O formato linha segue o padrão:
+
+```
+[TIME] [KIND] MESSAGE | KEY=VALUE | KEY=VALUE
+```
+
+Onde:
+- `[TIME]` → tempo da simulação com 2 casas decimais, ex: `[3.86]`
+- `[KIND]` → o valor do campo `kind`, ex: `[RESOURCE]`, `[STEP]`, `[BREAKPOINT]`
+- `MESSAGE` → o campo `message` do envelope (texto legível pronto)
+- `| KEY=VALUE` → detalhes extras do `data`, quando relevantes
+
+---
+
+### Regras de exibição por evento
+
+#### `SIM / RESET`
+```
+[0.00] [SIM] Simulation reset with seed 42
+```
+
+#### `SIM / RUN_COMPLETE`
+```
+[120.50] [SIM] Simulation complete
+```
+
+#### `STEP / STEP_BEFORE`
+```
+[0.00] [STEP ▶ 3] Timeout | triggering=customer | delay=1.5
+[0.00] [STEP ▶ 4] Request | resource=counter | triggering=customer
+[3.86] [STEP ▶ 8] Release | resource=counter
+[3.86] [STEP ▶ 9] Process | process=customer
+```
+> O número do passo deve ser parte do label `[STEP ▶ N]`. Campos relevantes do `data` são exibidos como `KEY=VALUE` após o `sim_event`.  
+> Campos exibidos conforme presença: `resource`, `process`, `delay`, `triggering` (como lista separada por vírgula).
+
+#### `STEP / STEP_AFTER`
+```
+[3.86] [STEP ◀ 8] active=customer
+```
+> Estilo distinto (ex: `◀`) para distinguir do `before`. Exibido apenas quando presente, pois já é condicional.
+
+#### `RESOURCE / REQUEST`
+```
+[0.00] [RESOURCE] customer requested counter  (<START> → counter)
+```
+
+#### `RESOURCE / RELEASE`
+```
+[3.86] [RESOURCE] customer released counter  (counter → <IDLE>)
+```
+
+#### `RESOURCE / PUT`
+```
+[5.00] [RESOURCE] producer put into warehouse  (<START> → warehouse) | amount=5
+```
+
+#### `RESOURCE / GET`
+```
+[6.00] [RESOURCE] consumer got from warehouse  (warehouse → <IDLE>)
+```
+
+#### `BREAKPOINT / BREAKPOINT_HIT`
+```
+[24.00] [BREAKPOINT ●] fila cheia | condition=len(resources['Queue'].queue) > 5 | hits=2
+```
+> Destaque visual diferenciado (ex: ícone `●` ou cor laranja) para facilitar identificação.
+
+#### `BREAKPOINT / BREAKPOINT_ERROR`
+```
+[24.00] [BREAKPOINT ✗] fila cheia | condition=len(resources['Queue'].queue) > 5 | error=NameError: name 'resources' is not defined
+```
+> Deve ter destaque em vermelho.
+
+#### `STATUS / MESSAGE` (fallback)
+```
+[0.00] [STATUS] <texto livre>
+```
+
+---
+
+### Regras gerais de exibição
+
+1. **Nunca exibir JSON bruto** na área de logs — sempre formatar.
+2. **Ordenar visualmente por seq** (já é garantido pela ordem de inserção no buffer circular).
+3. **Coloração por kind** (opcional, mas recomendado):
+   - `RESOURCE` → azul
+   - `STEP` → cinza claro
+   - `BREAKPOINT_HIT` → laranja
+   - `BREAKPOINT_ERROR` → vermelho
+   - `SIM` → verde
+   - `STATUS` → padrão
+4. **Truncar linhas longas** na exibição textual — valores de `condition` e `error` podem ser longos; limitar a `~120 chars` por linha e truncar com `...`.
+5. **Campo `message`** deve ser o texto principal da linha — o código de formatação não deve reescrever o conteúdo, apenas enriquecer com dados do `data`.
+6. **STEP_BEFORE de eventos internos** sem processo associado (ex: `Condition`, `Initialize`) devem ser exibidos, mas com menor destaque visual (ex: cor mais clara).

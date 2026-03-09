@@ -1,3 +1,23 @@
+"""Wafer Fabrication Example.
+
+Origin:
+    Original SimpyLens example.
+
+Credits:
+    - SimpyLens maintainers.
+
+Covers:
+    - Complex multi-resource flow (`Resource`, `PreemptiveResource`)
+    - Bulk inventories (`Container`)
+    - Dynamic resources and queues (`Store`, `FilterStore`)
+    - Combined events (`AllOf`/`AnyOf` style conditions)
+
+Scenario:
+    A semiconductor fabrication line processes lots through transport,
+    lithography, etching, implantation, metrology, and final warehousing,
+    including dynamic inspector scaling and maintenance preemption.
+"""
+
 import simpy
 import simpylens
 import random
@@ -8,7 +28,7 @@ from typing import List, Dict
 
 logging.basicConfig(level=logging.INFO, format="[%(sim_time)07.2f] %(levelname)s - %(message)s")
 
-# --- Classes de Domínio ---
+# Domain classes.
 
 
 @dataclass
@@ -26,38 +46,38 @@ class Lot:
     creation_time: float = 0.0
 
 
-# --- Motor da Fábrica ---
+# Factory engine.
 
 
 class SemiconductorFab:
     def __init__(self, env: simpy.Environment):
         self.env = env
 
-        # --- Recursos Estáticos de Instalação (1 a 12) ---
+        # Static facility resources (1 to 12).
 
-        # Insumos Contínuos (Containers)
+        # Continuous supplies (Containers).
         self.silicon_inventory = simpy.Container(env, capacity=5000, init=5000)  # 1
         self.photoresist = simpy.Container(env, capacity=1000, init=1000)  # 2
         self.ultra_pure_water = simpy.Container(env, capacity=10000, init=10000)  # 3
         self.nitrogen_gas = simpy.Container(env, capacity=5000, init=5000)  # 4
 
-        # Máquinas de Processamento (Resources e PreemptiveResources)
+        # Processing machines (Resources and PreemptiveResources).
         self.steppers = simpy.PreemptiveResource(env, capacity=2)  # 5 (Fotolitografia - Crítico)
         self.etchers = simpy.Resource(env, capacity=3)  # 6 (Corrosão)
         self.ion_implanters = simpy.Resource(env, capacity=2)  # 7 (Dopagem)
         self.furnaces = simpy.Resource(env, capacity=4)  # 8 (Difusão térmica)
         self.cmp_polishers = simpy.Resource(env, capacity=2)  # 9 (Polimento Químico-Mecânico)
 
-        # Logística e Qualidade (Stores e FilterStores)
+        # Logistics and quality control (Stores and FilterStore).
         self.agv_fleet = simpy.Resource(env, capacity=5)  # 10 (Robôs de transporte)
         self.metrology_queue = simpy.FilterStore(env, capacity=100)  # 11 (Inspeção com filtros)
         self.finished_goods = simpy.Store(env, capacity=1000)  # 12 (Armazém final)
 
-        # --- Rastreio de Recursos Dinâmicos ---
+        # Dynamic resource tracking.
         self.active_foups: Dict[str, simpy.Store] = {}  # 13+ (Recipientes criados sob demanda)
         self.dynamic_inspectors: Dict[str, simpy.Resource] = {}  # 14+ (Inspetores contratados sob demanda)
 
-        # Processos de background
+        # Background processes.
         self.env.process(self.facility_monitor())
         self.env.process(self.stepper_maintenance())
         self.env.process(self.dynamic_inspector_manager())
@@ -65,105 +85,98 @@ class SemiconductorFab:
     def log(self, msg: str):
         logging.info(msg, extra={"sim_time": self.env.now})
 
-    # --- Background Routines ---
+    # Background routines.
 
     def facility_monitor(self):
-        """Mantém os containers de fluidos e gases abastecidos."""
+        """Keep process-fluid containers replenished."""
         while True:
             if self.photoresist.level < 200:
                 yield self.photoresist.put(800)
-                self.log("Instalação: Photoresist reabastecido.")
+                self.log("Facility: Photoresist replenished.")
             if self.ultra_pure_water.level < 2000:
                 yield self.ultra_pure_water.put(8000)
             yield self.env.timeout(10)
 
     def stepper_maintenance(self):
-        """Preempção caótica: Máquinas de litografia quebram muito e exigem reparo imediato."""
+        """Trigger occasional stepper failures with preemptive maintenance."""
         while True:
             yield self.env.timeout(random.expovariate(1.0 / 60.0))
             if self.steppers.users:
-                self.log("[FALHA] Stepper quebrou! Iniciando preempção para manutenção.")
+                self.log("[FAILURE] Stepper broke down. Starting preemptive maintenance.")
                 with self.steppers.request(priority=0, preempt=True) as maint_req:
                     yield maint_req
                     yield self.env.timeout(random.uniform(15, 45))
-                    self.log("[FALHA] Stepper reparado.")
+                    self.log("[FAILURE] Stepper repaired.")
 
     def dynamic_inspector_manager(self):
-        """
-        Cria e destroi recursos dinamicamente baseado na fila do FilterStore.
-        Isso é um pesadelo para visualizadores estáticos.
-        """
+        """Create and remove inspectors dynamically based on queue pressure."""
         while True:
             queue_size = len(self.metrology_queue.items)
             active_dyn = len(self.dynamic_inspectors)
 
-            # Se a fila cresce, aloca dinamicamente um novo recurso de inspeção
+            # Scale out inspectors when metrology backlog grows.
             if queue_size > 10 and active_dyn < 3:
                 res_id = f"DynInspector_{uuid.uuid4().hex[:6]}"
                 self.dynamic_inspectors[res_id] = simpy.Resource(self.env, capacity=1)
-                self.log(f"[SCALING] Fila de metrologia alta ({queue_size}). Criado recurso dinâmico: {res_id}")
+                self.log(f"[SCALING] Metrology queue high ({queue_size}). Created dynamic resource: {res_id}")
 
-            # Se a fila zera, desaloca recursos dinâmicos ociosos
+            # Scale in idle dynamic inspectors when the queue is empty.
             elif queue_size == 0 and active_dyn > 0:
                 to_remove = []
                 for res_id, res in self.dynamic_inspectors.items():
-                    if res.count == 0:  # Ninguém usando
+                    if res.count == 0:
                         to_remove.append(res_id)
 
                 for res_id in to_remove:
-                    del self.dynamic_inspectors[res_id]  # O Garbage Collector do Python assume daqui
-                    self.log(f"[SCALING] Descomissionando recurso dinâmico ocioso: {res_id}")
+                    del self.dynamic_inspectors[res_id]
+                    self.log(f"[SCALING] Decommissioning idle dynamic resource: {res_id}")
 
             yield self.env.timeout(20)
 
 
 def process_lot(env: simpy.Environment, fab: SemiconductorFab, lot: Lot):
-    """Ciclo de vida de um lote de Wafers. Flui por múltiplos recursos com lógica combinada."""
-    fab.log(f"Lote {lot.id} iniciado (Prioridade {lot.priority}).")
+    """Lot lifecycle across transport, processing, inspection, and shipping."""
+    fab.log(f"Lot {lot.id} started (Priority {lot.priority}).")
 
-    # 1. Criação de Recurso Dinâmico: FOUP (Front Opening Unified Pod)
-    # Cada lote ganha um 'Store' exclusivo temporário para carregar seus wafers fisicamente.
+    # 1) Dynamic resource creation: FOUP (Front Opening Unified Pod).
     foup_id = f"FOUP_{lot.id}"
     fab.active_foups[foup_id] = simpy.Store(env, capacity=25)
 
-    # Consome silício para criar os wafers e coloca no FOUP dinâmico
+    # Consume silicon, create wafers, and load them into the dynamic FOUP.
     yield fab.silicon_inventory.get(25)
     for i in range(25):
         wafer = Wafer(id=f"{lot.id}-W{i}")
         lot.wafers.append(wafer)
         yield fab.active_foups[foup_id].put(wafer)
 
-    fab.log(f"Lote {lot.id} carregado no {foup_id} dinâmico.")
+    fab.log(f"Lot {lot.id} loaded into dynamic {foup_id}.")
 
     layers_target = 3
     for layer in range(layers_target):
-        # 2. Evento Combinado (AllOf - Lógica AND)
-        # Precisa simultaneamente de água ultrapura, gás nitrogênio E do robô de transporte.
-        # Se um faltar, ele trava esperando os 3.
+        # 2) Combined event (AND): requires UPW, nitrogen, and AGV.
         req_upw = fab.ultra_pure_water.get(50)
         req_n2 = fab.nitrogen_gas.get(20)
 
         with fab.agv_fleet.request() as agv_req:
             yield req_upw & req_n2 & agv_req
-            fab.log(f"Lote {lot.id} em transporte seguro para camada {layer+1}.")
+            fab.log(f"Lot {lot.id} in safe transport for layer {layer+1}.")
             yield env.timeout(random.uniform(2, 5))
 
-        # 3. Processo Crítico com Interrupção (Fotolitografia)
+        # 3) Critical process with potential interruption (lithography).
         completed_litho = False
         while not completed_litho:
             try:
                 yield fab.photoresist.get(10)
-                # Note a prioridade: Lotes urgentes passam na frente de lotes normais
+                # Priority-aware request: urgent lots can preempt normal flow.
                 with fab.steppers.request(priority=lot.priority) as step_req:
                     yield step_req
-                    fab.log(f"Lote {lot.id} no Stepper.")
+                    fab.log(f"Lot {lot.id} in stepper.")
                     yield env.timeout(random.uniform(10, 20))
                     completed_litho = True
             except simpy.Interrupt:
-                fab.log(f"Lote {lot.id} abortado no Stepper por manutenção! Retrabalhando camada...")
-                # Lógica de retrabalho: Apenas espera um pouco e o loop While tenta de novo
+                fab.log(f"Lot {lot.id} interrupted in stepper due to maintenance. Retrying layer.")
 
-        # 4. Processamento Padrão Sequencial
+        # 4) Standard sequential processing.
         with fab.etchers.request() as etch_req:
             yield etch_req
             yield env.timeout(15)
@@ -172,63 +185,59 @@ def process_lot(env: simpy.Environment, fab: SemiconductorFab, lot: Lot):
             yield ion_req
             yield env.timeout(25)
 
-    # 5. Metrologia e Qualidade (FilterStore)
-    # Coloca o lote inteiro para inspeção
+    # 5) Metrology and quality queue (FilterStore).
     yield fab.metrology_queue.put(lot)
 
-    # Simula a inspeção lendo os dados do lote.
-    # Aqui, a expedição pega o lote de volta baseando-se na sua ID usando lambda.
+    # Pull the same lot back from queue by ID after inspection.
     inspect_req = fab.metrology_queue.get(lambda l: l.id == lot.id)
 
-    # 6. Uso Opcional de Recurso Dinâmico (AnyOf - Lógica OR)
-    # Tenta usar um inspetor dinâmico (se existir) OU aguarda 30 minutos na fila normal
+    # 6) Optional dynamic inspector (OR): dynamic resource or timeout fallback.
     timeout_event = env.timeout(30)
 
     dynamic_req = None
     if fab.dynamic_inspectors:
-        # Pega qualquer inspetor dinâmico disponível
+        # Use any available dynamic inspector.
         inspector_id, dyn_res = random.choice(list(fab.dynamic_inspectors.items()))
         dynamic_req = dyn_res.request()
 
         results = yield dynamic_req | timeout_event
 
         if dynamic_req in results:
-            fab.log(f"Lote {lot.id} inspecionado via recurso dinâmico {inspector_id}.")
+            fab.log(f"Lot {lot.id} inspected via dynamic resource {inspector_id}.")
             yield env.timeout(5)
             dyn_res.release(dynamic_req)
         else:
             dynamic_req.cancel()
 
-    # Garante que o item saiu do FilterStore
+    # Ensure the inspected lot leaves the FilterStore.
     inspected_lot = yield inspect_req
 
-    # 7. Destruição do Recurso Dinâmico e Finalização
-    # Transfere os wafers do FOUP dinâmico para o armazém final
+    # 7) Dynamic resource destruction and finalization.
     for _ in range(25):
         w = yield fab.active_foups[foup_id].get()
         yield fab.finished_goods.put(w)
 
-    # Remove a referência do dicionário. Para o SimPy e para o Python, este Store "morre" aqui.
+    # Remove dynamic FOUP reference so it can be garbage-collected.
     del fab.active_foups[foup_id]
 
     lead_time = env.now - inspected_lot.creation_time
-    fab.log(f"Lote {lot.id} FINALIZADO. FOUP destruído. Lead time: {lead_time:.2f} min.")
+    fab.log(f"Lot {lot.id} FINISHED. FOUP removed. Lead time: {lead_time:.2f} min.")
 
 
 def lot_generator(env: simpy.Environment, fab: SemiconductorFab):
-    """Injeta lotes de produção continuamente."""
+    """Inject new production lots continuously."""
     lot_counter = 1
     while True:
-        # Chegada de novos lotes (distribuição exponencial)
+        # Exponential inter-arrival of lots.
         yield env.timeout(random.expovariate(1.0 / 25.0))
-        priority = 1 if random.random() > 0.1 else 2  # 10% dos lotes são alta prioridade
+        priority = 1 if random.random() > 0.1 else 2  # 10% of lots are high priority.
 
         new_lot = Lot(id=f"L{lot_counter:04d}", priority=priority, creation_time=env.now)
         env.process(process_lot(env, fab, new_lot))
         lot_counter += 1
 
 
-# --- Execução --- exemplo de main comum para rodar a simulação sem a interface gráfica
+# Example of a plain SimPy main (without GUI).
 # if __name__ == "__main__":
 #     random.seed(99)
 #     env = simpy.Environment()
@@ -236,16 +245,16 @@ def lot_generator(env: simpy.Environment, fab: SemiconductorFab):
 
 #     env.process(lot_generator(env, fab))
 
-#     logging.info("--- Iniciando Simulação Wafer Fab ---")
-#     env.run(until=300) # Roda por 300 minutos
+#     logging.info("--- Starting Wafer Fab Simulation ---")
+#     env.run(until=300)  # Run for 300 simulation minutes.
 
-#     logging.info("--- Simulação Concluída ---")
-#     logging.info(f"FOUPs Dinâmicos ainda vivos na memória: {len(fab.active_foups)}")
-#     logging.info(f"Inspetores Dinâmicos ainda vivos na memória: {len(fab.dynamic_inspectors)}")
-#     logging.info(f"Wafers no armazém final: {len(fab.finished_goods.items)}")
+#     logging.info("--- Simulation Complete ---")
+#     logging.info(f"Dynamic FOUPs still allocated: {len(fab.active_foups)}")
+#     logging.info(f"Dynamic inspectors still allocated: {len(fab.dynamic_inspectors)}")
+#     logging.info(f"Wafers in final warehouse: {len(fab.finished_goods.items)}")
 
 
-# exemplo de main para rodar a simulação com a interface gráfica
+# Example main to run with SimpyLens GUI.
 def setup(env):
     fab = SemiconductorFab(env)
     env.process(lot_generator(env, fab))
