@@ -142,9 +142,9 @@ def setup(env):
 lens = simpylens.Lens(model=setup, title="Pottery Factory Simulation")
 
 lens.add_breakpoint("any(item['type'] == 'Mug' for item in resources['Oven'].items)", label="Mug in Oven", edge="none", pause_on_hit=False)
-lens.add_breakpoint("resources['Shipping Depot'].level >= 50", label="Shipping Depot Full", edge="rising", pause_on_hit=False)
 lens.add_breakpoint("len(resources['Oven'].items) >= 5", label="Oven Batch Ready", edge="rising", pause_on_hit=False)
-lens.add_breakpoint("env.step_count >= 50", label="Step Count Reached", edge="rising")
-lens.add_breakpoint("env.now >= 500", label="Time Limit Reached", edge="rising")
+lens.add_breakpoint("resources['Shipping Depot'].level >= 50", label="Shipping Depot Full", edge="rising", pause_on_hit=False)
+lens.add_breakpoint("env.step_count >= 1000", label="Step Count Reached", edge="rising")
+lens.add_breakpoint("env.now >= 200", label="Time Limit Reached", edge="rising")
 
 lens.show()

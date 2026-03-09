@@ -82,7 +82,8 @@ class Viewer(tk.Tk):
         self.breakpoint_resize_start_width = 0
         self.breakpoint_row_cache = []
         self._breakpoint_refresh_job = None
-        self.paused_breakpoint_id = None
+        self.paused_breakpoint_ids = set()
+        self.last_breakpoint_hit_step = None
 
         self._setup_top_bar()
         self.main_area = ttk.Frame(self)
@@ -247,28 +248,38 @@ class Viewer(tk.Tk):
         self.lbl_speed_val.pack(side=tk.LEFT, padx=(5, 0))
 
     def on_play_click(self):
-        self.paused_breakpoint_id = None
+        self.paused_breakpoint_ids.clear()
+        self.last_breakpoint_hit_step = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.set_model(self.current_model)
         self.sim_ctrl.run()
 
     def on_step_click(self):
-        self.paused_breakpoint_id = None
+        self.paused_breakpoint_ids.clear()
+        self.last_breakpoint_hit_step = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.set_model(self.current_model)
         self.sim_ctrl.run_single_step()
 
     def on_reset_click(self):
-        self.paused_breakpoint_id = None
+        self.paused_breakpoint_ids.clear()
+        self.last_breakpoint_hit_step = None
         self._refresh_breakpoint_panel(force=True, reschedule=False)
         self.sim_ctrl.reset(self.current_model)
         self.after(100, self.center_view)
 
     def _on_breakpoint_hit(self, event):
         self.last_breakpoint_hit = dict(event)
-        if event.get("pause_on_hit", True):
-            self.paused_breakpoint_id = event.get("breakpoint_id")
-            self._refresh_breakpoint_panel(force=True, reschedule=False)
+        step = event.get("step")
+        if step is not None and step != self.last_breakpoint_hit_step:
+            self.paused_breakpoint_ids.clear()
+            self.last_breakpoint_hit_step = step
+
+        breakpoint_id = event.get("breakpoint_id")
+        if breakpoint_id is not None:
+            self.paused_breakpoint_ids.add(int(breakpoint_id))
+
+        self._refresh_breakpoint_panel(force=True, reschedule=False)
 
     def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
         return self.sim_ctrl.add_breakpoint(
@@ -585,7 +596,7 @@ class Viewer(tk.Tk):
                 tags = ()
                 if model["has_error"]:
                     tags = ("bp_error",)
-                elif self.paused_breakpoint_id == row_id:
+                elif row_id in self.paused_breakpoint_ids:
                     tags = ("bp_paused",)
                 values = (model["id"], model["label"], model["pause"], model["hits"], model["edge"], model["condition"])
                 self.breakpoint_tree.insert("", tk.END, iid=iid, values=values, tags=tags)
