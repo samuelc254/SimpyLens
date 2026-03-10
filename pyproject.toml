@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simpylens"
-version = "0.1.4"
+version = "0.1.5"
 description = "SimPyLens: zero-invasion visualization and debugging toolkit for SimPy simulations"
 authors = [
     {name = "Samuel Oliveira Costa"},
@@ -50,6 +50,7 @@ dev = [
 [project.urls]
 "Repository" = "https://github.com/samuelc254/simpylens"
 "Issues" = "https://github.com/samuelc254/simpylens/issues"
+"Documentation" = "https://github.com/samuelc254/simpylens/docs"
 
 [tool.setuptools.packages.find]
 where = ["src"]
