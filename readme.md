@@ -40,37 +40,51 @@ It is designed for developers, researchers, and operations teams building **disc
 
 ## SimPy Visual Demos and Screenshots
 
-These visuals show SimpyLens in practical **discrete-event simulation debugging** workflows, including breakpoint monitoring, resource metrics inspection, and manual layout control.
+This section gives a guided visual tour of SimpyLens for **discrete-event simulation debugging** in real projects.
+The media below are ordered from high-level interface overview to focused inspection panels.
 
-### Animated Demo: Pottery Factory Simulation (18 FPS, loop)
+### 1) Full Interface Overview (Pottery Factory)
 
 ![SimPy pottery factory visualization and debugging workflow in SimpyLens](assets/pottery_factory_18fps.gif)
 
-This GIF demonstrates real-time resource flow, simulation controls, and runtime visualization for a production-style SimPy model.
+`assets/pottery_factory_18fps.gif` shows the main SimpyLens workflow in the pottery example:
+- simulation execution controls
+- real-time resource blocks and flow
+- breakpoint monitoring behavior
+- live resource metrics and runtime inspection context
 
-### Animated Demo: Manual Layout Interaction (18 FPS, loop)
+It is the visual summary of the full SimpyLens interface in action.
+
+### 2) Manual Resource Layout System
 
 ![SimPy manual layout interaction for simulation resource visualization in SimpyLens](assets/manual_layout_18fps.gif)
 
-This GIF highlights viewport navigation and manual resource block arrangement for clearer simulation analysis.
+`assets/manual_layout_18fps.gif` demonstrates how to manually position resource blocks to match your mental model or presentation needs.
+This is especially useful when you want clearer storytelling of process flow during debugging or demos.
 
-### Breakpoint Panel Screenshot
+### 3) Breakpoint Management Panel (Pottery Example)
 
 ![SimPy breakpoint panel with conditions, hit counters, and edge modes in SimpyLens](assets/pottery_breakpoints.png)
 
-Shows conditional breakpoints, hit tracking, pause flags, and edge behavior (`none`, `rising`, `falling`) in the debugger UI.
+`assets/pottery_breakpoints.png` is a focused screenshot of the Breakpoint panel, showing:
+- conditional breakpoint expressions
+- per-breakpoint pause behavior
+- hit counters
+- edge modes (`none`, `rising`, `falling`)
 
-### Resource Metrics Details (Store)
+### 4) Resource Details Window: Store
 
 ![Store resource metrics details window for SimPy debugging in SimpyLens](assets/store_details.png)
 
-Displays store-focused runtime metrics, queue state, and item inspection useful for bottleneck analysis.
+`assets/store_details.png` shows the details window for a `Store`, including runtime metrics, queue state, and detailed item inspection.
+This view helps identify stock/backlog bottlenecks in storage-like resources.
 
-### Resource Metrics Details (Resource)
+### 5) Resource Details Window: Resource
 
 ![Resource metrics details window with queue and utilization statistics in SimpyLens](assets/resource_details.png)
 
-Shows utilization and waiting-time metrics for `Resource` entities, supporting performance diagnostics in simulation models.
+`assets/resource_details.png` shows the details window for a `Resource`, focused on utilization and waiting-time metrics.
+This view supports performance diagnostics for worker/machine-style constrained resources.
 
 ## Key Features
 

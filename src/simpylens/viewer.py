@@ -101,7 +101,7 @@ class Viewer(tk.Tk):
             speed_getter=lambda: self.scl_speed.get(),
             log_callback=self.log_message,
             on_breakpoint_cb=self._on_breakpoint_hit,
-            seed=42 if seed is None else seed,
+            seed=seed,
         )
 
         # Define deterministic initial state before the breakpoint panel is rendered.

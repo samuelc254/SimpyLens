@@ -139,7 +139,7 @@ def setup(env):
     env.process(factory(env, molding, glazing, painting, oven, clay_depot, shipping))
 
 
-lens = simpylens.Lens(model=setup, title="Pottery Factory Simulation")
+lens = simpylens.Lens(model=setup, title="Pottery Factory Simulation", seed=42)
 
 lens.add_breakpoint("any(item['type'] == 'Mug' for item in resources['Oven'].items)", label="Mug in Oven", edge="none", pause_on_hit=False)
 lens.add_breakpoint("len(resources['Oven'].items) >= 5", label="Oven Batch Ready", edge="rising", pause_on_hit=False)

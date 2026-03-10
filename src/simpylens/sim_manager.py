@@ -129,7 +129,7 @@ class SimulationController:
         self.speed_getter = speed_getter
         self.log_callback = log_callback if log_callback else lambda msg: None
         self.on_breakpoint_cb = on_breakpoint_cb
-        self.seed = 42 if seed is None else seed
+        self.seed = seed
         self._log_buffer = log_buffer if log_buffer is not None else _LogBuffer(capacity=1000)
 
         self._next_breakpoint_id = 1
@@ -380,7 +380,7 @@ class SimulationController:
         self._model = func
 
     def set_seed(self, seed):
-        self.seed = 42 if seed is None else seed
+        self.seed = seed
 
     def reset(self, model=None):
         if model is not None:
@@ -589,7 +589,7 @@ class SimulationController:
 
 
 class Lens:
-    def __init__(self, model=None, title="SimPyLens", gui=True, metrics=True, seed=42):
+    def __init__(self, model=None, title="SimPyLens", gui=True, metrics=True, seed=None):
         if metrics:
             MetricsPatch.apply()
         TrackingPatch.apply()
@@ -598,7 +598,7 @@ class Lens:
         self._title = title
         self._gui = bool(gui)
         self._metrics = bool(metrics)
-        self._seed = 42 if seed is None else seed
+        self._seed = seed
 
         self.viewer = None
         self._sim_ctrl: Optional[SimulationController] = None
@@ -652,7 +652,7 @@ class Lens:
         return self.viewer.mainloop()
 
     def set_seed(self, seed):
-        self._seed = 42 if seed is None else seed
+        self._seed = seed
         if self._sim_ctrl is not None:
             self._sim_ctrl.set_seed(self._seed)
 

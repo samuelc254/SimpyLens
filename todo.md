@@ -1,13 +1,5 @@
 # TODO v1 — SimpyLens
 
-## Backlog funcional
-
-- adicionar rewind step (avaliar a viabilidade) (passo futuro)
-- revizar testes unitários 
-- refatorar readme para assets aparecerem no pypi
-
----
-
 ## Arquitetura alvo
 
 - patch de métricas: renomear para `simpylens.MetricsPatch.apply()` para não confundir com patch do viewer
