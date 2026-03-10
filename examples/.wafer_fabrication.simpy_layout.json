@@ -1,0 +1,18 @@
+{
+  "manual_positions": {
+    "silicon_inventory":  [50.0,  -200.0],
+    "photoresist":        [370.0, -200.0],
+    "ultra_pure_water":   [50.0,  -330.0],
+    "nitrogen_gas":       [370.0, -330.0],
+
+    "steppers":           [750.0,  -200.0],
+    "etchers":            [1070.0, -200.0],
+    "ion_implanters":     [1390.0, -200.0],
+    "furnaces":           [750.0,  -330.0],
+    "cmp_polishers":      [1070.0, -330.0],
+    "agv_fleet":          [1390.0, -330.0],
+
+    "metrology_queue":    [1770.0, -200.0],
+    "finished_goods":     [1770.0, -330.0]
+  }
+}

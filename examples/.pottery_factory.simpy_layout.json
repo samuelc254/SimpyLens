@@ -1,0 +1,28 @@
+{
+  "manual_positions": {
+    "Clay Depot": [
+      0,
+      0
+    ],
+    "Molding Station": [
+      350,
+      0
+    ],
+    "Glazing Station": [
+      700,
+      0
+    ],
+    "Oven": [
+      1050,
+      0
+    ],
+    "Painting Station": [
+      1400,
+      0
+    ],
+    "Shipping Depot": [
+      1750,
+      0
+    ]
+  }
+}
