@@ -58,9 +58,11 @@ class Viewer(tk.Tk):
         self.layout_config_path = self._resolve_layout_config_path()
         self._load_manual_layout_cache()
 
-        self.last_tick_time = time.time()
-        self.tick_count = 0
-        self.last_fps_update = 0
+        # TPS must reflect real simulation progress (step delta / wall-clock delta),
+        # not UI redraw frequency.
+        self.last_fps_update = time.time()
+        self.last_step_for_tps = 0
+        self.tps_update_interval = 0.5
 
         self.log_enabled = tk.BooleanVar(value=True)
         self.log_collapsed = False
@@ -326,16 +328,21 @@ class Viewer(tk.Tk):
             self.lbl_step.config(text="—")
 
         current_time = time.time()
-        self.tick_count += 1
-        elapsed = current_time - self.last_fps_update
 
-        if elapsed >= 0.5:
-            if elapsed > 0:
-                tps = self.tick_count / elapsed
-                self.lbl_speed_val.config(text=f"{tps:.1f} tps")
-
+        # If the simulation was reset (or step counter restarted), realign baseline.
+        if step < self.last_step_for_tps:
+            self.last_step_for_tps = step
             self.last_fps_update = current_time
-            self.tick_count = 0
+            self.lbl_speed_val.config(text="0.0 tps")
+            return
+
+        elapsed = current_time - self.last_fps_update
+        if elapsed >= self.tps_update_interval and elapsed > 0:
+            step_delta = max(0, step - self.last_step_for_tps)
+            tps = step_delta / elapsed
+            self.lbl_speed_val.config(text=f"{tps:.1f} tps")
+            self.last_step_for_tps = step
+            self.last_fps_update = current_time
 
     def _setup_log_panel(self):
         """Sets up the log panel at the bottom."""
