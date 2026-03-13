@@ -10,7 +10,11 @@ permissions:
   id-token: write
 
 jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   publish:
+    needs: tests
     runs-on: ubuntu-latest
     environment: pypi
 
@@ -23,7 +27,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Validate tag matches project version
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Validate tag matches project version and is NOT a release candidate
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
@@ -33,6 +40,13 @@ jobs:
           import tomllib
 
           tag = os.environ["TAG_NAME"]
+          
+          # Ensure it's not an RC tag
+          if "rc" in tag.lower():
+              raise SystemExit(
+                  f"Cannot publish RC tag '{tag}' to PyPI. Use TestPyPI for RCs."
+              )
+          
           tag_version = tag[1:] if tag.startswith("v") else tag
 
           pyproject = pathlib.Path("pyproject.toml")

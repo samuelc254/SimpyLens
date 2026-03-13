@@ -3,7 +3,8 @@ import random
 import simpy
 import time
 from collections import deque
-from typing import Iterable, Optional
+from pathlib import Path
+from typing import Callable, Dict, Iterable, List, Optional, Union
 
 from .breakpoint import Breakpoint
 from .metrics_patch import MetricsPatch
@@ -589,7 +590,15 @@ class SimulationController:
 
 
 class Lens:
-    def __init__(self, model=None, title="SimPyLens", gui=True, metrics=True, seed=None):
+    def __init__(
+        self,
+        model: Optional[Callable[[simpy.Environment], None]] = None,
+        title: str = "SimPyLens",
+        gui: bool = True,
+        metrics: bool = True,
+        seed: Optional[int] = None,
+        lens_json_path: Optional[Union[str, Path]] = None,
+    ) -> None:
         if metrics:
             MetricsPatch.apply()
         TrackingPatch.apply()
@@ -599,6 +608,7 @@ class Lens:
         self._gui = bool(gui)
         self._metrics = bool(metrics)
         self._seed = seed
+        self._lens_json_path = lens_json_path
 
         self.viewer = None
         self._sim_ctrl: Optional[SimulationController] = None
@@ -606,7 +616,7 @@ class Lens:
         if self._gui:
             from .viewer import Viewer
 
-            self.viewer = Viewer(model=self._model, title=title, seed=self._seed)
+            self.viewer = Viewer(model=self._model, title=title, seed=self._seed, lens_json_path=self._lens_json_path)
             self._sim_ctrl = self.viewer.sim_ctrl
         else:
             self._sim_ctrl = SimulationController(
@@ -623,47 +633,54 @@ class Lens:
                 self._sim_ctrl.reset(self._model)
 
     @property
-    def model(self):
+    def model(self) -> Optional[Callable[[simpy.Environment], None]]:
         return self._model
 
     @property
-    def seed(self):
+    def seed(self) -> Optional[int]:
         return self._seed
 
     @property
-    def title(self):
+    def title(self) -> str:
         return self._title
 
     @property
-    def gui(self):
+    def gui(self) -> bool:
         return self._gui
 
     @property
-    def metrics(self):
+    def metrics(self) -> bool:
         return self._metrics
 
     @property
-    def sim_ctrl(self):
+    def sim_ctrl(self) -> Optional[SimulationController]:
         return self._sim_ctrl
 
-    def show(self):
+    def show(self) -> None:
         if self.viewer is None:
             return None
         return self.viewer.mainloop()
 
-    def set_seed(self, seed):
+    def set_seed(self, seed: Optional[int]) -> None:
         self._seed = seed
         if self._sim_ctrl is not None:
             self._sim_ctrl.set_seed(self._seed)
 
-    def set_model(self, model):
+    def set_model(self, model: Callable[[simpy.Environment], None]) -> None:
         self._model = model
         if self.viewer is not None:
             self.viewer.current_model = model
         if self._sim_ctrl is not None:
             self._sim_ctrl.set_model(model)
 
-    def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
+    def add_breakpoint(
+        self,
+        condition: Union[str, Callable[..., bool], Breakpoint],
+        label: Optional[str] = None,
+        enabled: bool = True,
+        pause_on_hit: bool = True,
+        edge: str = "none",
+    ) -> int:
         if self.viewer is not None:
             return self.viewer.add_breakpoint(
                 condition=condition,
@@ -681,32 +698,32 @@ class Lens:
             edge=edge,
         )
 
-    def remove_breakpoint(self, breakpoint_id):
+    def remove_breakpoint(self, breakpoint_id: int) -> bool:
         return self._sim_ctrl.remove_breakpoint(breakpoint_id)
 
-    def clear_breakpoints(self):
+    def clear_breakpoints(self) -> None:
         self._sim_ctrl.clear_breakpoints()
 
-    def set_breakpoint_enabled(self, breakpoint_id, enabled):
+    def set_breakpoint_enabled(self, breakpoint_id: int, enabled: bool) -> bool:
         return self._sim_ctrl.set_breakpoint_enabled(breakpoint_id, enabled)
 
-    def set_breakpoint_pause_on_hit(self, breakpoint_id, pause_on_hit):
+    def set_breakpoint_pause_on_hit(self, breakpoint_id: int, pause_on_hit: bool) -> bool:
         return self._sim_ctrl.set_breakpoint_pause_on_hit(breakpoint_id, pause_on_hit)
 
-    def list_breakpoints(self):
+    def list_breakpoints(self) -> List[Breakpoint]:
         return self._sim_ctrl.list_breakpoints()
 
-    def get_logs(self):
+    def get_logs(self) -> List[Dict]:
         if self._sim_ctrl is None:
             return []
         return self._sim_ctrl.get_logs()
 
-    def set_log_capacity(self, capacity):
+    def set_log_capacity(self, capacity: int) -> None:
         if self._sim_ctrl is None:
             return
         self._sim_ctrl.set_log_capacity(capacity)
 
-    def run(self):
+    def run(self) -> None:
         if self._sim_ctrl is None:
             return
         self._sim_ctrl.set_model(self._model)
@@ -715,18 +732,18 @@ class Lens:
         else:
             self._sim_ctrl.run_headless()
 
-    def pause(self):
+    def pause(self) -> None:
         if self._sim_ctrl is None:
             return
         self._sim_ctrl.pause()
 
-    def step(self):
+    def step(self) -> None:
         if self._sim_ctrl is None:
             return
         self._sim_ctrl.set_model(self._model)
         self._sim_ctrl.run_single_step()
 
-    def reset(self):
+    def reset(self) -> None:
         if self._sim_ctrl is None:
             return
         self._sim_ctrl.reset(self._model)

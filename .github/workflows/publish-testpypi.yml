@@ -2,15 +2,19 @@ name: Publish to TestPyPI
 
 on:
   push:
-    branches:
-      - test
+    tags:
+      - "v*rc*"
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   publish:
+    needs: tests
     runs-on: ubuntu-latest
     environment: testpypi
 
@@ -22,6 +26,40 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Validate tag is RC and matches project version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          tag = os.environ["TAG_NAME"]
+          
+          # Ensure it's an RC tag
+          if "rc" not in tag.lower():
+              raise SystemExit(
+                  f"Tag '{tag}' is not a release candidate. RC tags must contain 'rc'."
+              )
+          
+          tag_version = tag[1:] if tag.startswith("v") else tag
+
+          pyproject = pathlib.Path("pyproject.toml")
+          data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+          project_version = data["project"]["version"]
+
+          if tag_version != project_version:
+              raise SystemExit(
+                  f"Tag '{tag}' does not match pyproject version '{project_version}'."
+              )
+
+          print(f"Tag '{tag}' matches pyproject version '{project_version}'.")
+          PY
 
       - name: Install build tools
         run: python -m pip install --upgrade build

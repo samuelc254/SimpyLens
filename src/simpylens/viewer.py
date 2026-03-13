@@ -10,13 +10,18 @@ from pathlib import Path
 
 
 class Viewer(tk.Tk):
-    def __init__(self, model=None, title="SimPyLens", seed=None):
+    def __init__(self, model=None, title="SimPyLens", seed=None, lens_json_path=None):
         """
         Initializes SimPyLens.
 
         :param model: A function that takes a simpy.Environment as its only argument
                       and sets up the simulation (creates resources, processes, etc).
         :param title: Window title.
+        :param seed: Optional random seed for reproducible simulations.
+        :param lens_json_path: Optional explicit path to the layout JSON file.
+            When provided, this path is used instead of the auto-inferred default
+            (``.<model_file>.lens.json`` next to the model's source file).
+            Useful for versioning multiple layouts for the same model.
         """
         super().__init__()
         self._app_icon_image = None
@@ -55,7 +60,7 @@ class Viewer(tk.Tk):
         self.manual_layout_by_name = {}
         self.detail_windows = {}
         self.last_breakpoint_hit = None
-        self.layout_config_path = self._resolve_layout_config_path()
+        self.layout_config_path = self._resolve_layout_config_path(lens_json_path)
         self._load_manual_layout_cache()
 
         # TPS must reflect real simulation progress (step delta / wall-clock delta),
@@ -141,15 +146,18 @@ class Viewer(tk.Tk):
         except Exception:
             self._app_icon_image = None
 
-    def _resolve_layout_config_path(self):
+    def _resolve_layout_config_path(self, lens_json_path=None):
+        if lens_json_path is not None:
+            return Path(lens_json_path).resolve()
+
         setup_path = None
         if self.current_model and hasattr(self.current_model, "__code__"):
             setup_path = Path(self.current_model.__code__.co_filename).resolve()
 
         if setup_path is not None:
-            return setup_path.parent / f".{setup_path.stem}.simpy_layout.json"
+            return setup_path.parent / f".{setup_path.stem}.lens.json"
 
-        return Path.cwd() / ".simpy_layout.json"
+        return Path.cwd() / ".lens.json"
 
     def _load_manual_layout_cache(self):
         self.manual_layout_by_name = {}

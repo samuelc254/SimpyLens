@@ -12,7 +12,7 @@ This document defines the public API contract for SimpyLens v1.
 ### Constructor
 
 ```python
-Lens(model=None, title="SimPyLens", gui=True, metrics=True, seed=42)
+Lens(model=None, title="SimPyLens", gui=True, metrics=True, seed=42, lens_json_path=None)
 ```
 
 - `model`: callable that receives a single `simpy.Environment` argument.
@@ -20,6 +20,16 @@ Lens(model=None, title="SimPyLens", gui=True, metrics=True, seed=42)
 - `gui`: if `True`, creates and manages the viewer lifecycle.
 - `metrics`: if `True`, applies `MetricsPatch` automatically.
 - `seed`: deterministic simulation seed.
+- `lens_json_path`: optional path (`str` or `Path`) to the layout JSON file used
+  by the GUI to persist and restore manual resource positions.  
+  When omitted, SimpyLens automatically infers the path as
+  `.<model_file>.lens.json` placed next to the model's source file.  
+  Supplying an explicit path is useful when you want to version multiple
+  distinct layouts for the same model:
+
+  ```python
+  lens = Lens(model=my_model, lens_json_path="layouts/production.lens.json")
+  ```
 
 ### Model Contract
 
@@ -88,6 +98,25 @@ def model(env: simpy.Environment):
 - `lens.seed` (read-only, use `set_seed` to update)
 - `lens.title` (read-only)
 - `lens.gui` (read-only)
+
+## Layout File
+
+When `gui=True`, SimpyLens persists the manual positions of resource blocks in a
+JSON file so that layouts survive restarts.
+
+**Default file name:** `.<model_file>.lens.json`, placed in the same directory as
+the Python file that defines the model function.
+
+**Custom path:** pass `lens_json_path` to `Lens(...)` to use
+any path, enabling multiple named layouts for the same model:
+
+```python
+# Development layout
+lens_dev = Lens(model=factory, lens_json_path=".factory.dev.lens.json")
+
+# Production layout stored inside a layouts/ folder
+lens_prod = Lens(model=factory, lens_json_path="layouts/factory_prod.lens.json")
+```
 
 ## Metrics API
 
