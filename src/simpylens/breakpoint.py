@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, Optional, Union
+
+
 class Breakpoint:
     __slots__ = (
         "_id",
@@ -15,7 +20,14 @@ class Breakpoint:
         "_callable",
     )
 
-    def __init__(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
+    def __init__(
+        self,
+        condition: Union[str, Callable[..., bool]],
+        label: Optional[str] = None,
+        enabled: bool = True,
+        pause_on_hit: bool = True,
+        edge: str = "none",
+    ) -> None:
         self._id = None
         self.hit_count = 0
         self.last_error = None
@@ -56,28 +68,28 @@ class Breakpoint:
         self.label = label_text if label_text else self._expression
 
     @property
-    def id(self):
+    def id(self) -> Optional[int]:
         return self._id
 
     @property
-    def kind(self):
+    def kind(self) -> str:
         return self._kind
 
     @property
-    def expression(self):
+    def expression(self) -> str:
         return self._expression
 
-    def assign_id(self, breakpoint_id):
+    def assign_id(self, breakpoint_id: int) -> None:
         if self._id is not None:
             raise ValueError("Breakpoint id is immutable and already assigned")
         self._id = int(breakpoint_id)
 
-    def evaluate(self, context, eval_builtins):
+    def evaluate(self, context: Dict[str, Any], eval_builtins: Dict[str, Any]) -> bool:
         if self._kind == "expression":
             return bool(eval(self._compiled, {"__builtins__": eval_builtins}, context))
         return bool(self._callable(context))
 
-    def compute_hit(self, matched):
+    def compute_hit(self, matched: bool) -> bool:
         previous = self._last_matched
 
         if self.edge == "rising":
@@ -90,10 +102,10 @@ class Breakpoint:
         self._last_matched = bool(matched)
         return hit
 
-    def record_hit(self):
+    def record_hit(self) -> None:
         self.hit_count += 1
 
-    def clone_public(self):
+    def clone_public(self) -> "Breakpoint":
         clone_condition = self._expression if self._kind == "expression" else self._callable
         cloned = Breakpoint(
             condition=clone_condition,

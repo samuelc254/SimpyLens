@@ -9,21 +9,43 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   publish:
+    needs: tests
     runs-on: ubuntu-latest
     environment: pypi
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - name: Validate tag matches project version
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Validate tag commit is on main
+        run: |
+          git fetch origin main --depth=1
+          if git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"; then
+            echo "Tag commit is contained in origin/main."
+          else
+            echo "::error::Tag commit $GITHUB_SHA is not contained in origin/main."
+            exit 1
+          fi
+
+      - name: Validate tag matches project version and is NOT a release candidate
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
@@ -33,18 +55,29 @@ jobs:
           import tomllib
 
           tag = os.environ["TAG_NAME"]
-          tag_version = tag[1:] if tag.startswith("v") else tag
+
+          def normalize_version(value: str) -> str:
+              value = value.strip()
+              return value[1:] if value.lower().startswith("v") else value
+          
+          # Ensure it's not an RC tag
+          if "rc" in tag.lower():
+              raise SystemExit(
+                  f"Cannot publish RC tag '{tag}' to PyPI. Use TestPyPI for RCs."
+              )
+          
+          tag_version = normalize_version(tag)
 
           pyproject = pathlib.Path("pyproject.toml")
           data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-          project_version = data["project"]["version"]
+          project_version = normalize_version(str(data["project"]["version"]))
 
           if tag_version != project_version:
               raise SystemExit(
-                  f"Tag '{tag}' does not match pyproject version '{project_version}'."
+                  f"Tag version '{tag_version}' does not match pyproject version '{project_version}'."
               )
 
-          print(f"Tag '{tag}' matches pyproject version '{project_version}'.")
+          print(f"Tag version '{tag_version}' matches pyproject version '{project_version}'.")
           PY
 
       - name: Install build tools

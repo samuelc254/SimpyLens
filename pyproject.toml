@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simpylens"
-version = "0.1.5"
+version = "v0.1.6"
 description = "SimPyLens: zero-invasion visualization and debugging toolkit for SimPy simulations"
 authors = [
     {name = "Samuel Oliveira Costa"},
