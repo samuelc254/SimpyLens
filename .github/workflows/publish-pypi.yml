@@ -45,7 +45,7 @@ jobs:
             exit 1
           fi
 
-      - name: Validate tag matches project version and is NOT a release candidate
+      - name: Validate tag matches project version
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
@@ -59,12 +59,6 @@ jobs:
           def normalize_version(value: str) -> str:
               value = value.strip()
               return value[1:] if value.lower().startswith("v") else value
-          
-          # Ensure it's not an RC tag
-          if "rc" in tag.lower():
-              raise SystemExit(
-                  f"Cannot publish RC tag '{tag}' to PyPI. Use TestPyPI for RCs."
-              )
           
           tag_version = normalize_version(tag)
 

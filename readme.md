@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/simpylens.svg)](https://pypi.org/project/simpylens/)
 [![Python versions](https://img.shields.io/pypi/pyversions/simpylens.svg)](https://pypi.org/project/simpylens/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/samuelc254/SimpyLens/blob/main/LICENSE)
 
 SimpyLens is a low-intrusion toolkit for SimPy model visualization, debugging, and runtime inspection. It helps developers understand queueing behavior, resource contention, and process flow in real time without rewriting simulation business logic.
 
@@ -101,6 +101,6 @@ Suggested workflow:
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [API Reference](docs/api_reference.md)
-- [Logging Schema](docs/logging_schema.md)
+- [Architecture](https://github.com/samuelc254/SimpyLens/blob/main/docs/architecture.md)
+- [API Reference](https://github.com/samuelc254/SimpyLens/blob/main/docs/api_reference.md)
+- [Logging Schema](https://github.com/samuelc254/SimpyLens/blob/main/docs/logging_schema.md)
