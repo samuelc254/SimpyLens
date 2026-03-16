@@ -16,6 +16,12 @@ This document describes the target architecture boundaries for SimpyLens v1.
 - `Viewer` must not change business rules of the user simulation model.
 - Examples and public docs should point users to `Lens` as the main entry point.
 
+### Viewer Log Interaction
+
+- Log rendering in the Tkinter `Text` widget may enrich event lines with source locations (`file:line`).
+- Source locations are clickable and routed through an internal editor opener utility.
+- Click behavior must be non-blocking and must never crash the UI when editor launch fails.
+
 ## 3) Patch Independence
 
 ### `MetricsPatch`
@@ -50,3 +56,12 @@ This document describes the target architecture boundaries for SimpyLens v1.
 - `reset()` always recreates environment and reapplies seed.
 - Breakpoints must work in GUI and headless modes.
 - When `gui=True`, `Lens` manages viewer lifecycle and mainloop delegation.
+- `STEP_AFTER` logs are emitted for every processed simulation step.
+
+## 6) Editor Integration Boundary
+
+- Editor launching is an internal viewer concern (not part of public `Lens` API).
+- Default editor command is `code`, overridable via `SIMPYLENS_EDITOR`.
+- Launch attempts must follow EAFP with `subprocess` and guarded exceptions.
+- If the editor cannot be launched, fallback behavior is clipboard copy of `file:line` plus a terminal warning.
+- The fallback is silent with respect to GUI stability (no fatal dialog, no crash).

@@ -1,5 +1,9 @@
 from .sim_manager import SimulationController
 import json
+import os
+import shlex
+import shutil
+import subprocess
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -7,6 +11,172 @@ import math
 import weakref
 import gc
 from pathlib import Path
+
+
+class EditorManager:
+    def __init__(self, root):
+        self.root = root
+
+    def _editor_command(self):
+        configured = os.environ.get("SIMPYLENS_EDITOR", "code")
+        command = (configured or "code").strip()
+        if not command:
+            command = "code"
+        try:
+            parts = shlex.split(command, posix=(os.name != "nt"))
+        except Exception:
+            parts = [command]
+        return parts or ["code"]
+
+    def _build_open_arg_candidates(self, command_parts, file_path, line, location_text):
+        candidates = []
+        seen = set()
+
+        def _add(args):
+            key = tuple(str(item) for item in args)
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(list(key))
+
+        has_placeholders = any(token in part for part in command_parts for token in ("{file}", "{line}", "{location}"))
+
+        if has_placeholders:
+            replaced = []
+            for part in command_parts:
+                replaced.append(part.replace("{file}", str(file_path)).replace("{line}", str(line)).replace("{location}", location_text))
+            _add(replaced)
+            return candidates
+
+        exe = Path(command_parts[0]).name.lower()
+
+        if exe in {
+            "code",
+            "code.cmd",
+            "code.exe",
+            "code-insiders",
+            "code-insiders.cmd",
+            "code-insiders.exe",
+            "codium",
+            "codium.cmd",
+            "cursor",
+            "cursor.cmd",
+        }:
+            _add([*command_parts, "-g", location_text])
+
+        if "pycharm" in exe or exe in {
+            "idea",
+            "idea64.exe",
+            "webstorm",
+            "webstorm64.exe",
+            "clion",
+            "clion64.exe",
+            "rubymine",
+            "rubymine64.exe",
+            "goland",
+            "goland64.exe",
+        }:
+            _add([*command_parts, "--line", str(line), str(file_path)])
+
+        if exe in {"nvim", "vim", "vi", "nano", "emacs", "emacsclient"}:
+            _add([*command_parts, f"+{line}", str(file_path)])
+
+        if exe in {"mate", "subl", "sublime_text"}:
+            _add([*command_parts, location_text])
+
+        if exe in {"gedit", "kate", "xed", "pluma", "geany"}:
+            _add([*command_parts, f"+{line}", str(file_path)])
+
+        if exe in {"notepad++", "notepad++.exe"}:
+            _add([*command_parts, f"-n{line}", str(file_path)])
+
+        # Generic fallbacks for unknown editors/IDEs.
+        _add([*command_parts, location_text])
+        _add([*command_parts, str(file_path), str(line)])
+        _add([*command_parts, "--line", str(line), str(file_path)])
+        _add([*command_parts, f"+{line}", str(file_path)])
+        _add([*command_parts, str(file_path)])
+
+        return candidates
+
+    def _resolve_editor_command(self, command_parts):
+        if not command_parts:
+            return ["code"]
+
+        head = command_parts[0]
+        has_path_hint = any(sep in head for sep in ("/", "\\")) or Path(head).drive
+        if has_path_hint:
+            return command_parts
+
+        resolved = shutil.which(head)
+        if resolved:
+            return [resolved, *command_parts[1:]]
+
+        if os.name == "nt":
+            for suffix in (".cmd", ".exe", ".bat"):
+                candidate = shutil.which(f"{head}{suffix}")
+                if candidate:
+                    return [candidate, *command_parts[1:]]
+
+            lowered = head.lower()
+            if lowered in {"code", "code-insiders", "code.cmd", "code-insiders.cmd"}:
+                local_app_data = os.environ.get("LOCALAPPDATA")
+                program_files = os.environ.get("ProgramFiles")
+                program_files_x86 = os.environ.get("ProgramFiles(x86)")
+
+                candidates = []
+                if local_app_data:
+                    candidates.extend(
+                        [
+                            Path(local_app_data) / "Programs" / "Microsoft VS Code" / "bin" / "code.cmd",
+                            Path(local_app_data) / "Programs" / "Microsoft VS Code Insiders" / "bin" / "code-insiders.cmd",
+                        ]
+                    )
+                if program_files:
+                    candidates.append(Path(program_files) / "Microsoft VS Code" / "bin" / "code.cmd")
+                if program_files_x86:
+                    candidates.append(Path(program_files_x86) / "Microsoft VS Code" / "bin" / "code.cmd")
+
+                for candidate in candidates:
+                    if candidate.exists():
+                        return [str(candidate), *command_parts[1:]]
+
+        return command_parts
+
+    def _clipboard_fallback(self, location_text, reason):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(location_text)
+            self.root.update_idletasks()
+        except Exception:
+            pass
+        print(f"SimpyLens fallback: copied '{location_text}' to clipboard ({reason}).")
+
+    def open_location(self, file_path, line):
+        location_text = f"{file_path}:{line}"
+        command_parts = self._editor_command()
+        command_parts = self._resolve_editor_command(command_parts)
+        candidates = self._build_open_arg_candidates(command_parts, file_path, line, location_text)
+        last_exc = None
+
+        for args in candidates:
+            try:
+                subprocess.Popen(args)
+                return True
+            except FileNotFoundError as exc:
+                last_exc = exc
+                break
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        if isinstance(last_exc, FileNotFoundError):
+            self._clipboard_fallback(location_text, "editor not found in PATH")
+            return False
+
+        reason = f"all editor launch attempts failed ({last_exc})" if last_exc else "all editor launch attempts failed"
+        self._clipboard_fallback(location_text, reason)
+        return False
 
 
 class Viewer(tk.Tk):
@@ -62,6 +232,7 @@ class Viewer(tk.Tk):
         self.last_breakpoint_hit = None
         self.layout_config_path = self._resolve_layout_config_path(lens_json_path)
         self._load_manual_layout_cache()
+        self.editor_manager = EditorManager(self)
 
         # TPS must reflect real simulation progress (step delta / wall-clock delta),
         # not UI redraw frequency.
@@ -80,6 +251,8 @@ class Viewer(tk.Tk):
         self.log_resize_start_height = 0
         self.log_content_min_height = 100
         self.log_content_max_height = 600
+        self.log_link_targets = {}
+        self._next_log_link_id = 1
 
         self.breakpoint_panel_collapsed = False
         self.breakpoint_panel_width = 320
@@ -402,6 +575,7 @@ class Viewer(tk.Tk):
         self.txt_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.txt_log.tag_configure("log_find_match", background="#FFF59D")
         self.txt_log.tag_configure("log_find_current", background="#FBC02D")
+        self.txt_log.tag_configure("log_link_base", foreground="#0b57d0", underline=True)
 
         self.log_find_popup = tk.Label(
             self.log_content_frame,
@@ -672,10 +846,40 @@ class Viewer(tk.Tk):
     def clear_log(self):
         self.txt_log.config(state="normal")
         self.txt_log.delete("1.0", tk.END)
+        for tag_name in list(self.log_link_targets.keys()):
+            self.txt_log.tag_delete(tag_name)
+        self.log_link_targets = {}
         self.txt_log.config(state="disabled")
         self.log_search_matches = []
         self.log_search_index = -1
         self._update_log_find_counter()
+
+    def _create_log_location_link(self, insert_at, rendered_line, location_token, file_path, line_number):
+        if not location_token or not file_path:
+            return
+
+        stop_index = f"{insert_at}+{len(rendered_line)}c"
+        start = self.txt_log.search(location_token, insert_at, stopindex=stop_index, exact=True)
+        if not start:
+            return
+
+        end = f"{start}+{len(location_token)}c"
+        tag_name = f"log_link_{self._next_log_link_id}"
+        self._next_log_link_id += 1
+
+        self.log_link_targets[tag_name] = (str(file_path), int(line_number))
+        self.txt_log.tag_add(tag_name, start, end)
+        self.txt_log.tag_add("log_link_base", start, end)
+        self.txt_log.tag_bind(tag_name, "<Enter>", lambda _event: self.txt_log.config(cursor="hand2"))
+        self.txt_log.tag_bind(tag_name, "<Leave>", lambda _event: self.txt_log.config(cursor="xterm"))
+        self.txt_log.tag_bind(tag_name, "<Button-1>", lambda _event, bound_tag=tag_name: self._open_log_link(bound_tag))
+
+    def _open_log_link(self, tag_name):
+        location = self.log_link_targets.get(tag_name)
+        if not location:
+            return
+        file_path, line_number = location
+        self.editor_manager.open_location(file_path, line_number)
 
     def _start_log_resize(self, event):
         self.log_resize_start_y = event.y_root
@@ -797,6 +1001,27 @@ class Viewer(tk.Tk):
             text = str(text)
             return text if len(text) <= limit else text[:limit] + "..."
 
+        def _location_text():
+            file_value = data.get("file")
+            line_value = data.get("line")
+            if file_value:
+                try:
+                    file_name = Path(str(file_value)).name
+                except Exception:
+                    file_name = str(file_value)
+                if line_value is not None:
+                    return f"{file_name}:{line_value}"
+                return file_name
+            if line_value is not None:
+                return str(line_value)
+            return ""
+
+        def _append_location(base_text):
+            location_text = _location_text()
+            if not location_text:
+                return base_text
+            return f"{base_text} | {location_text}"
+
         # --- SIM ---
         if kind == "SIM":
             return f"[{timestamp:.2f}] [SIM] {message}"
@@ -816,12 +1041,12 @@ class Viewer(tk.Tk):
                 if "process" in data and "triggering" not in data:
                     extras.append(f"process={data['process']}")
                 suffix = " | " + " | ".join(extras) if extras else ""
-                return f"[{timestamp:.2f}] [STEP \u25b6 {step}] {sim_ev}{suffix}"
+                return _append_location(f"[{timestamp:.2f}] [STEP {step} \u2794] {sim_ev}{suffix}")
 
             if event == "STEP_AFTER":
                 step = data.get("step", "?")
                 active = data.get("active_process", "-")
-                return f"[{timestamp:.2f}] [STEP \u25c4 {step}] active={active}"
+                return _append_location(f"[{timestamp:.2f}] [STEP {step} \u2714] active={active}")
 
             return f"[{timestamp:.2f}] [STEP] {message}"
 
@@ -841,8 +1066,8 @@ class Viewer(tk.Tk):
             suffix = " | " + " | ".join(extras) if extras else ""
             move = f"({from_name} \u2192 {to_name})"
             if message:
-                return f"[{timestamp:.2f}] [RESOURCE] {message}  {move}{suffix}"
-            return f"[{timestamp:.2f}] [RESOURCE] {process_name} {event.lower()} {resource_name}  {move}{suffix}"
+                return _append_location(f"[{timestamp:.2f}] [RESOURCE] {message}  {move}{suffix}")
+            return _append_location(f"[{timestamp:.2f}] [RESOURCE] {process_name} {event.lower()} {resource_name}  {move}{suffix}")
 
         # --- BREAKPOINT ---
         if kind == "BREAKPOINT":
@@ -878,15 +1103,36 @@ class Viewer(tk.Tk):
         self.txt_log.config(state="normal")
         for msg in messages:
             line = msg
+            location_token = None
+            location_file = None
+            location_line = None
             if isinstance(msg, str):
                 stripped = msg.strip()
                 if stripped.startswith("{") and stripped.endswith("}"):
                     try:
                         payload = json.loads(stripped)
                         line = self._format_json_log(payload)
+                        if isinstance(payload, dict):
+                            payload_data = payload.get("data") or {}
+                            file_value = payload_data.get("file")
+                            line_value = payload_data.get("line")
+                            if file_value and line_value is not None:
+                                try:
+                                    location_line = int(line_value)
+                                except (TypeError, ValueError):
+                                    location_line = None
+                                if location_line is not None:
+                                    location_file = str(file_value)
+                                    location_token = f"{Path(location_file).name}:{location_line}"
                     except json.JSONDecodeError:
                         line = msg
-            self.txt_log.insert(tk.END, str(line) + "\n")
+
+            rendered_line = str(line)
+            insert_at = self.txt_log.index("end-1c")
+            self.txt_log.insert(tk.END, rendered_line + "\n")
+
+            if location_token and location_file and location_line is not None:
+                self._create_log_location_link(insert_at, rendered_line, location_token, location_file, location_line)
 
         total_lines = int(self.txt_log.index("end-1c").split(".")[0])
         if total_lines > self.max_log_lines:

@@ -245,6 +245,58 @@ def _action_to_event(action_name):
     }.get(action_name, action_name.upper())
 
 
+def _extract_process_source_location(process):
+    """Best-effort extraction of user code location from a SimPy process generator."""
+    if process is None:
+        return {}
+
+    try:
+        generator = getattr(process, "_generator", None)
+        frame = getattr(generator, "gi_frame", None) if generator is not None else None
+        if frame is None:
+            return {}
+
+        location = {}
+        code = getattr(frame, "f_code", None)
+        filename = getattr(code, "co_filename", None) if code is not None else None
+        line = getattr(frame, "f_lineno", None)
+
+        if filename:
+            location["file"] = str(filename)
+        if isinstance(line, int):
+            location["line"] = line
+
+        return location
+    except Exception:
+        return {}
+
+
+def _resolve_process_from_event(event):
+    """Best-effort process discovery for the next event queued in the environment."""
+    if event is None:
+        return None
+
+    process = getattr(event, "proc", None)
+    if process is not None:
+        return process
+
+    if type(event).__name__ == "Process" and hasattr(event, "_generator"):
+        return event
+
+    callbacks = getattr(event, "callbacks", None)
+    if callbacks:
+        for callback in callbacks:
+            owner = getattr(callback, "__self__", None)
+            if owner is not None and hasattr(owner, "_generator"):
+                return owner
+
+            nested_owner = getattr(owner, "__self__", None) if owner is not None else None
+            if nested_owner is not None and hasattr(nested_owner, "_generator"):
+                return nested_owner
+
+    return None
+
+
 def register_interaction(env, resource_instance, action, extra_data=None):
     if not env or not hasattr(env, "active_process") or env.active_process is None:
         return
@@ -259,6 +311,7 @@ def register_interaction(env, resource_instance, action, extra_data=None):
 
     process = env.active_process
     process_name = _process_label(process)
+    source_location = _extract_process_source_location(process)
     setattr(state, LAST_PROCESS_NAME_ATTR, process_name)
     current_name = getattr(resource_instance, "visual_name", str(resource_instance))
     previous_resource = _resolve_process_resource(env, process)
@@ -278,6 +331,8 @@ def register_interaction(env, resource_instance, action, extra_data=None):
             "from": from_name,
             "to": "<IDLE>",
         }
+        if source_location:
+            data.update(source_location)
         if extra_data:
             data.update(extra_data)
         payload = {
@@ -300,6 +355,8 @@ def register_interaction(env, resource_instance, action, extra_data=None):
         "from": previous_name,
         "to": current_name,
     }
+    if source_location:
+        data.update(source_location)
     if extra_data:
         data.update(extra_data)
 
@@ -567,12 +624,17 @@ class TrackedEnvironment(simpy.Environment):
         # --- Inspect the next event before executing it ---
         data_before = {"step": step_num}
         triggering_processes = []
+        triggering_process_objects = []
         event_queue = getattr(self, "_queue", [])
 
         if event_queue:
             try:
                 next_item = event_queue[0]
                 event = next_item[3]
+                source_process = _resolve_process_from_event(event)
+                source_location = _extract_process_source_location(source_process)
+                if source_location:
+                    data_before.update(source_location)
 
                 sim_event_name = type(event).__name__
                 data_before["sim_event"] = sim_event_name
@@ -594,6 +656,7 @@ class TrackedEnvironment(simpy.Environment):
                     for callback in event.callbacks:
                         obj = getattr(callback, "__self__", None)
                         if hasattr(obj, "name"):
+                            triggering_process_objects.append(obj)
                             process_name = obj.name
                             if not process_name and hasattr(obj, "__self__"):
                                 owner = obj.__self__
@@ -626,26 +689,32 @@ class TrackedEnvironment(simpy.Environment):
             msg_parts.append(f"process={data_before['process']}")
 
         step_logs.append(
-            _format_payload({
-                "schema_version": "1.0",
-                "kind": "STEP",
-                "event": "STEP_BEFORE",
-                "time": self.now,
-                "level": "DEBUG",
-                "source": "tracking",
-                "message": " | ".join(msg_parts),
-                "data": data_before,
-            })
+            _format_payload(
+                {
+                    "schema_version": "1.0",
+                    "kind": "STEP",
+                    "event": "STEP_BEFORE",
+                    "time": self.now,
+                    "level": "DEBUG",
+                    "source": "tracking",
+                    "message": " | ".join(msg_parts),
+                    "data": data_before,
+                }
+            )
         )
 
         super().step()
 
         # --- After-step: check if active process differs from expected ---
         active_process_name = None
+        active_process_obj = None
         if self.active_process:
+            active_process_obj = self.active_process
             active_process_name = self.active_process.name
         elif triggering_processes:
             active_process_name = ",".join(triggering_processes)
+            if len(triggering_process_objects) == 1:
+                active_process_obj = triggering_process_objects[0]
 
         before_expected_process = None
         if triggering_processes:
@@ -657,10 +726,18 @@ class TrackedEnvironment(simpy.Environment):
         effective_before_process = before_expected_process or "-"
         self.last_process_name = None if effective_after_process == "-" else effective_after_process
 
-        should_log_after = effective_after_process != effective_before_process
-        if should_log_after:
-            step_logs.append(
-                _format_payload({
+        data_after = {
+            "step": step_num,
+            "active_process": effective_after_process,
+            "previous_process": effective_before_process,
+        }
+        active_source_location = _extract_process_source_location(active_process_obj)
+        if active_source_location:
+            data_after.update(active_source_location)
+
+        step_logs.append(
+            _format_payload(
+                {
                     "schema_version": "1.0",
                     "kind": "STEP",
                     "event": "STEP_AFTER",
@@ -668,9 +745,10 @@ class TrackedEnvironment(simpy.Environment):
                     "level": "DEBUG",
                     "source": "tracking",
                     "message": f"Step {step_num}: active={effective_after_process}",
-                    "data": {"step": step_num, "active_process": effective_after_process},
-                })
+                    "data": data_after,
+                }
             )
+        )
 
 
 def _apply_tracking_patch():

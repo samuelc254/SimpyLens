@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simpylens"
-version = "v0.1.6"
-description = "SimPyLens: zero-invasion visualization and debugging toolkit for SimPy simulations"
+version = "v0.1.7b1"
+description = "SimPyLens: A low-intrusion GUI and debugger for Simpy simulations"
 authors = [
     {name = "Samuel Oliveira Costa"},
     {email = "sam.oc2005@gmail.com"},

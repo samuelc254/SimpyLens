@@ -491,6 +491,34 @@ def test_step_before_event_logged():
     assert len(step_befores) >= 1
 
 
+def test_step_after_event_always_logged():
+    def model(env):
+        def proc(env):
+            yield env.timeout(1)
+
+        env.process(proc(env))
+
+    env = _sim(model)
+    step_afters = _events_of_kind(env, "STEP_AFTER")
+    assert len(step_afters) >= 1
+
+
+def test_step_after_includes_source_location_when_process_resumes():
+    def model(env):
+        def proc(env):
+            yield env.timeout(1)
+            yield env.timeout(1)
+
+        env.process(proc(env))
+
+    env = _sim(model)
+    step_afters = _events_of_kind(env, "STEP_AFTER")
+    entries_with_location = [entry for entry in step_afters if isinstance(entry.get("data", {}).get("line"), int) and entry.get("data", {}).get("file")]
+
+    assert entries_with_location
+    assert any(str(entry["data"]["file"]).endswith("test_tracking_patch.py") for entry in entries_with_location)
+
+
 def test_step_logs_have_required_schema_fields():
     def model(env):
         def proc(env):
