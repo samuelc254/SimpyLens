@@ -66,7 +66,7 @@ Only envelope fields belong at root level. All event-specific payload data must 
 | `SIM` | `RESET` | `lens` | Simulation reset. |
 | `SIM` | `RUN_COMPLETE` | `lens` | Simulation finished (empty schedule). |
 | `STEP` | `STEP_BEFORE` | `tracking` | Before one SimPy step. |
-| `STEP` | `STEP_AFTER` | `tracking` | After step when active process differs from expected. |
+| `STEP` | `STEP_AFTER` | `tracking` | After every SimPy step. |
 | `RESOURCE` | `REQUEST` | `tracking` | Process requested a resource. |
 | `RESOURCE` | `RELEASE` | `tracking` | Process released a resource. |
 | `RESOURCE` | `PUT` | `tracking` | Put item/amount into Store/Container. |
@@ -100,7 +100,9 @@ Only envelope fields belong at root level. All event-specific payload data must 
   "delay": 1.5,
   "resource": "counter",
   "process": "customer",
-  "triggering": ["customer", "source"]
+  "triggering": ["customer", "source"],
+  "file": "/path/to/model.py",
+  "line": 37
 }
 ```
 
@@ -111,7 +113,10 @@ Optional fields must be included only when applicable.
 ```json
 "data": {
   "step": 3,
-  "active_process": "customer"
+  "active_process": "customer",
+  "previous_process": "customer",
+  "file": "/path/to/model.py",
+  "line": 37
 }
 ```
 
@@ -124,7 +129,9 @@ Optional fields must be included only when applicable.
   "resource": "counter",
   "process": "customer",
   "from": "<START>",
-  "to": "counter"
+  "to": "counter",
+  "file": "/path/to/model.py",
+  "line": 37
 }
 ```
 
@@ -138,7 +145,9 @@ For releases, `to` should be `"<IDLE>"`.
   "process": "producer",
   "from": "<START>",
   "to": "warehouse",
-  "amount": 5
+  "amount": 5,
+  "file": "/path/to/model.py",
+  "line": 37
 }
 ```
 
@@ -208,7 +217,31 @@ Use `amount` (`Container`), `item` (`Store`), or `filter` (`FilterStore`) only w
     "step": 3,
     "sim_event": "Timeout",
     "delay": 1.5,
-    "triggering": ["customer"]
+    "triggering": ["customer"],
+    "file": "examples/pottery_factory.py",
+    "line": 37
+  }
+}
+```
+
+### `STEP / STEP_AFTER`
+
+```json
+{
+  "schema_version": "1.0",
+  "seq": 6,
+  "time": 1.5,
+  "kind": "STEP",
+  "event": "STEP_AFTER",
+  "level": "DEBUG",
+  "source": "tracking",
+  "message": "Step 3: active=customer",
+  "data": {
+    "step": 3,
+    "active_process": "customer",
+    "previous_process": "customer",
+    "file": "examples/pottery_factory.py",
+    "line": 37
   }
 }
 ```
@@ -305,41 +338,63 @@ Display template:
 - `STEP / STEP_BEFORE`
 
 ```text
-[0.00] [STEP > 3] Timeout | triggering=customer | delay=1.5
-[0.00] [STEP > 4] Request | resource=counter | triggering=customer
-[3.86] [STEP > 8] Release | resource=counter
-[3.86] [STEP > 9] Process | process=customer
+[0.00] [STEP 3 ➔] Timeout | triggering=customer | delay=1.5 | pottery_factory.py:37
+[0.00] [STEP 4 ➔] Request | resource=counter | triggering=customer | pottery_factory.py:41
+[3.86] [STEP 8 ➔] Release | resource=counter | pottery_factory.py:49
+[3.86] [STEP 9 ➔] Process | process=customer | pottery_factory.py:50
 ```
 
 - `STEP / STEP_AFTER`
 
 ```text
-[3.86] [STEP < 8] active=customer
+[3.86] [STEP 8 ✔] active=customer | pottery_factory.py:49
 ```
 
 - `RESOURCE / REQUEST`
 
 ```text
-[0.00] [RESOURCE] customer requested counter (<START> -> counter)
+[0.00] [RESOURCE] customer requested counter (<START> -> counter) | pottery_factory.py:41
 ```
 
 - `RESOURCE / RELEASE`
 
 ```text
-[3.86] [RESOURCE] customer released counter (counter -> <IDLE>)
+[3.86] [RESOURCE] customer released counter (counter -> <IDLE>) | pottery_factory.py:49
 ```
 
 - `RESOURCE / PUT`
 
 ```text
-[5.00] [RESOURCE] producer put into warehouse (<START> -> warehouse) | amount=5
+[5.00] [RESOURCE] producer put into warehouse (<START> -> warehouse) | amount=5 | pottery_factory.py:64
 ```
 
 - `RESOURCE / GET`
 
 ```text
-[6.00] [RESOURCE] consumer got from warehouse (warehouse -> <IDLE>)
+[6.00] [RESOURCE] consumer got from warehouse (warehouse -> <IDLE>) | pottery_factory.py:71
 ```
+
+## 8) Clickable Source Location in Viewer
+
+When `data.file` and `data.line` are available, viewer rendering appends a location token in the format:
+
+```text
+<filename>:<line>
+```
+
+Example:
+
+```text
+[1.00] [STEP 3 ✔] active=worker | pottery_factory.py:78
+```
+
+The location token is clickable in the Tkinter log panel. Clicking it attempts to open the configured editor at the exact line.
+
+Editor command resolution order:
+
+1. Read `SIMPYLENS_EDITOR` (if set), otherwise default to `code`.
+2. Invoke the editor via `subprocess`.
+3. On failure, copy `file:line` to clipboard and print a terminal warning.
 
 - `BREAKPOINT / BREAKPOINT_HIT`
 

@@ -99,6 +99,51 @@ def model(env: simpy.Environment):
 - `lens.title` (read-only)
 - `lens.gui` (read-only)
 
+## Viewer Log Source Links (GUI)
+
+When `gui=True`, logs shown in the internal viewer can include a source location token in the form `filename:line`.
+
+- Location token is appended when event payload provides `data.file` and `data.line`.
+- Location token is clickable in the log panel.
+- Clicking attempts to open the editor at the exact file and line.
+
+### Editor Configuration
+
+Environment variable:
+
+- `SIMPYLENS_EDITOR`: optional override for the editor command.
+- Default when unset: `code`.
+
+Examples:
+
+```bash
+# VS Code
+SIMPYLENS_EDITOR="code"
+
+# PyCharm command-line launcher
+SIMPYLENS_EDITOR="pycharm"
+
+# Neovim
+SIMPYLENS_EDITOR="nvim"
+
+# Custom command with placeholders
+SIMPYLENS_EDITOR="my-editor --open {file} --line {line}"
+```
+
+Supported placeholders in `SIMPYLENS_EDITOR`:
+
+- `{file}`: absolute file path
+- `{line}`: line number
+- `{location}`: `file:line`
+
+### Fallback Behavior
+
+If editor launch fails (for example, command not in `PATH`), SimpyLens:
+
+1. Copies `file:line` to system clipboard.
+2. Prints a warning message in terminal.
+3. Continues running without crashing the GUI.
+
 ## Layout File
 
 When `gui=True`, SimpyLens persists the manual positions of resource blocks in a
