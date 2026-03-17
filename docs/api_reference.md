@@ -68,6 +68,42 @@ def model(env: simpy.Environment):
 - `get_logs()` returns a JSON-serializable list snapshot.
 - `set_log_capacity(capacity)` updates bounded log capacity (default `1000`).
 
+## GUI Inspector Tabs (Internal Viewer UI)
+
+When `gui=True`, the internal Inspector panel contains two tabs:
+
+- `Breakpoints`: visual state and controls for registered breakpoints.
+- `Task Viewer`: live, read-only snapshot of active processes.
+
+### Task Viewer Columns
+
+- `#`: scheduler queue order for the process target event when available.
+- `Process`: process display label with stable process identifier.
+- `Yielding On`: current SimPy target type (for example `Timeout`, `Request`, `Put`, `Get`, `Condition`).
+- `Holding`: resources currently held by that process.
+- `Waiting On`: resource/store/container currently being awaited.
+
+### Task Viewer Behavior
+
+- Only alive processes are displayed.
+- Clicking a column header cycles sort mode: ascending, descending, then unsorted.
+- Unsorted mode keeps the original process creation order.
+- Queue order values are derived from SimPy scheduler queue position when the current target is present in `env._queue`.
+- Empty-state values are rendered as `-`.
+- Selection state is preserved across panel refreshes when possible.
+
+### Data Source Contract (Internal)
+
+Task Viewer reads tracking data maintained by `TrackingPatch` in `env.process_states` with process-scoped fields:
+
+- `process_id`
+- `label`
+- `creation_order`
+- `holding` (set)
+- `queuing` (set)
+
+These fields are internal implementation details that support GUI inspection and are not a separate public API surface.
+
 ## `Breakpoint`
 
 `add_breakpoint()` accepts either:

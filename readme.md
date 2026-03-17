@@ -12,7 +12,7 @@ SimpyLens is a low-intrusion toolkit for SimPy model visualization, debugging, a
 
 ![SimPy discrete-event simulation visualization and debugging workflow in SimpyLens](https://raw.githubusercontent.com/samuelc254/simpylens/main/assets/pottery_factory.gif)
 
-`assets/pottery_factory.gif` shows the full SimpyLens interface for discrete-event simulation debugging: runtime controls, process flow, resource movement, and live inspection.
+`assets/pottery_factory.gif` shows the SimpyLens interface for discrete-event simulation debugging: runtime controls, process flow, resource movement, and live inspection.
 It is useful for users searching for a SimPy visual debugger, queueing simulation viewer, or simulation runtime inspection tool.
 
 ### Manual Resource Layout for Process Storytelling
@@ -27,6 +27,7 @@ This is especially relevant for simulation demos, teaching, and operations revie
 - Real-time visualization for SimPy resources and process interactions.
 - Runtime controls for play, step, pause, reset, and speed.
 - Breakpoints with expression/callable conditions and edge modes.
+- Inspector with `Breakpoints` and `Task Viewer` tabs for live process state inspection.
 - Structured logs for simulation, step lifecycle, resources, and breakpoints.
 - Headless mode for tests and CI.
 - Optional metrics collection with read-only resource metrics.

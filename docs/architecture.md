@@ -16,6 +16,14 @@ This document describes the target architecture boundaries for SimpyLens v1.
 - `Viewer` must not change business rules of the user simulation model.
 - Examples and public docs should point users to `Lens` as the main entry point.
 
+### Inspector Panel and Tabs
+
+- The right-side Inspector panel is a GUI-only internal component.
+- Inspector contains two tabs: `Breakpoints` and `Task Viewer`.
+- `Task Viewer` is read-only and observational; it must never mutate simulation state.
+- `Task Viewer` data comes from tracking state attached to `env` (`process_states`) and scheduler queue snapshots.
+- Sorting and row selection behavior in `Task Viewer` are UI-only concerns and must not affect model execution.
+
 ### Viewer Log Interaction
 
 - Log rendering in the Tkinter `Text` widget may enrich event lines with source locations (`file:line`).
