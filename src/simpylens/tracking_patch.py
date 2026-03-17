@@ -11,6 +11,9 @@ TRACKED_RESOURCES_ATTR = "tracked_resources"
 PENDING_TRANSFERS_ATTR = "pending_transfers"
 STEP_LOGS_ATTR = "step_logs"
 PROCESS_LOCATIONS_ATTR = "process_locations"
+PROCESS_STATES_ATTR = "process_states"
+PROCESS_NAME_COUNTERS_ATTR = "process_name_counters"
+PROCESS_CREATION_COUNTER_ATTR = "process_creation_counter"
 LAST_EVENT_NAME_ATTR = "last_event_name"
 LAST_PROCESS_NAME_ATTR = "last_process_name"
 
@@ -27,6 +30,12 @@ def _ensure_tracking_state(env):
         setattr(env, STEP_LOGS_ATTR, [])
     if not hasattr(env, PROCESS_LOCATIONS_ATTR):
         setattr(env, PROCESS_LOCATIONS_ATTR, weakref.WeakKeyDictionary())
+    if not hasattr(env, PROCESS_STATES_ATTR):
+        setattr(env, PROCESS_STATES_ATTR, weakref.WeakKeyDictionary())
+    if not hasattr(env, PROCESS_NAME_COUNTERS_ATTR):
+        setattr(env, PROCESS_NAME_COUNTERS_ATTR, {})
+    if not hasattr(env, PROCESS_CREATION_COUNTER_ATTR):
+        setattr(env, PROCESS_CREATION_COUNTER_ATTR, 0)
     if not hasattr(env, LAST_EVENT_NAME_ATTR):
         setattr(env, LAST_EVENT_NAME_ATTR, None)
     if not hasattr(env, LAST_PROCESS_NAME_ATTR):
@@ -51,6 +60,126 @@ def _resolve_process_resource(env, process):
     except Exception:
         pass
     return ref_obj
+
+
+def _ensure_process_state(env, process):
+    state = _ensure_tracking_state(env)
+    if state is None or process is None:
+        return None
+
+    process_states = getattr(state, PROCESS_STATES_ATTR)
+    tracked_state = process_states.get(process)
+    if tracked_state is not None:
+        return tracked_state
+
+    process_name = _process_label(process)
+    name_counters = getattr(state, PROCESS_NAME_COUNTERS_ATTR)
+    next_idx = int(name_counters.get(process_name, 0)) + 1
+    name_counters[process_name] = next_idx
+
+    creation_order = int(getattr(state, PROCESS_CREATION_COUNTER_ATTR, 0)) + 1
+    setattr(state, PROCESS_CREATION_COUNTER_ATTR, creation_order)
+
+    tracked_state = {
+        "process_id": int(id(process)),
+        "name": str(process_name),
+        "label": f"{process_name}#{next_idx}",
+        "creation_order": creation_order,
+        "holding": set(),
+        "queuing": set(),
+    }
+    process_states[process] = tracked_state
+    return tracked_state
+
+
+def _queue_entry_text(resource_name, wait_kind):
+    resource_text = str(resource_name)
+    if wait_kind == "put":
+        return f"{resource_text} (Waiting to Put)"
+    if wait_kind == "get":
+        return f"{resource_text} (Waiting to Get)"
+    return resource_text
+
+
+def _track_process_queuing(env, process, resource_name, wait_kind="request"):
+    tracked_state = _ensure_process_state(env, process)
+    if tracked_state is None:
+        return
+    tracked_state["queuing"].add(_queue_entry_text(resource_name, wait_kind))
+
+
+def _track_process_queue_cleared(env, process, resource_name, wait_kind="request"):
+    tracked_state = _ensure_process_state(env, process)
+    if tracked_state is None:
+        return
+    tracked_state["queuing"].discard(_queue_entry_text(resource_name, wait_kind))
+
+
+def _track_process_request_granted(env, process, resource_name):
+    tracked_state = _ensure_process_state(env, process)
+    if tracked_state is None:
+        return
+    resource_text = str(resource_name)
+    tracked_state["queuing"].discard(resource_text)
+    tracked_state["holding"].add(resource_text)
+
+
+def _track_process_released(env, process, resource_name):
+    tracked_state = _ensure_process_state(env, process)
+    if tracked_state is None:
+        return
+    resource_text = str(resource_name)
+    tracked_state["holding"].discard(resource_text)
+    tracked_state["queuing"].discard(resource_text)
+
+
+def _attach_request_grant_tracker(env, resource_instance, request_event):
+    state = _ensure_tracking_state(env)
+    if state is None or request_event is None:
+        return request_event
+
+    resource_name = getattr(resource_instance, "visual_name", str(resource_instance))
+
+    def _on_granted(event):
+        process = getattr(event, "proc", None)
+        if process is not None:
+            _track_process_request_granted(env, process, resource_name)
+
+    callbacks = getattr(request_event, "callbacks", None)
+    if callbacks is None:
+        _on_granted(request_event)
+    else:
+        callbacks.append(_on_granted)
+
+    return request_event
+
+
+def _attach_transaction_queue_tracker(env, resource_instance, event, wait_kind):
+    state = _ensure_tracking_state(env)
+    if state is None or event is None:
+        return event
+
+    process = getattr(event, "proc", None)
+    if process is None:
+        process = getattr(env, "active_process", None)
+    if process is None:
+        return event
+
+    resource_name = getattr(resource_instance, "visual_name", str(resource_instance))
+    if not bool(getattr(event, "triggered", False)):
+        _track_process_queuing(env, process, resource_name, wait_kind=wait_kind)
+
+    def _on_done(done_event):
+        done_process = getattr(done_event, "proc", None) or process
+        _track_process_queue_cleared(env, done_process, resource_name, wait_kind=wait_kind)
+
+    callbacks = getattr(event, "callbacks", None)
+    if callbacks is None:
+        _on_done(event)
+    else:
+        callbacks.append(_on_done)
+
+    return event
 
 
 def _process_label(process):
@@ -311,12 +440,18 @@ def register_interaction(env, resource_instance, action, extra_data=None):
 
     process = env.active_process
     process_name = _process_label(process)
+    _ensure_process_state(env, process)
     source_location = _extract_process_source_location(process)
     setattr(state, LAST_PROCESS_NAME_ATTR, process_name)
     current_name = getattr(resource_instance, "visual_name", str(resource_instance))
     previous_resource = _resolve_process_resource(env, process)
     action_name = str(action).lower()
     event_name = _action_to_event(action_name)
+
+    if action_name == "request":
+        _track_process_queuing(env, process, current_name)
+    elif action_name == "release":
+        _track_process_released(env, process, current_name)
 
     if previous_resource is None:
         previous_name = "<START>"
@@ -460,8 +595,9 @@ class TrackedResource(OriginalResource):
         self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
+        request_event = super().request(*args, **kwargs)
         register_interaction(self._env, self, "request")
-        return super().request(*args, **kwargs)
+        return _attach_request_grant_tracker(self._env, self, request_event)
 
     def release(self, *args, **kwargs):
         register_interaction(self._env, self, "release")
@@ -477,8 +613,9 @@ class TrackedPriorityResource(OriginalPriorityResource):
         self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
+        request_event = super().request(*args, **kwargs)
         register_interaction(self._env, self, "request")
-        return super().request(*args, **kwargs)
+        return _attach_request_grant_tracker(self._env, self, request_event)
 
     def release(self, *args, **kwargs):
         register_interaction(self._env, self, "release")
@@ -494,8 +631,9 @@ class TrackedPreemptiveResource(OriginalPreemptiveResource):
         self._env.tracked_resources.add(self)
 
     def request(self, *args, **kwargs):
+        request_event = super().request(*args, **kwargs)
         register_interaction(self._env, self, "request")
-        return super().request(*args, **kwargs)
+        return _attach_request_grant_tracker(self._env, self, request_event)
 
     def release(self, *args, **kwargs):
         register_interaction(self._env, self, "release")
@@ -516,8 +654,9 @@ class TrackedContainer(OriginalContainer):
             extra["amount"] = _serialize_value(args[0])
         elif "amount" in kwargs:
             extra["amount"] = _serialize_value(kwargs["amount"])
+        put_event = super().put(*args, **kwargs)
         register_interaction(self._env, self, "put", extra_data=extra or None)
-        return super().put(*args, **kwargs)
+        return _attach_transaction_queue_tracker(self._env, self, put_event, wait_kind="put")
 
     def get(self, *args, **kwargs):
         extra = {}
@@ -525,8 +664,9 @@ class TrackedContainer(OriginalContainer):
             extra["amount"] = _serialize_value(args[0])
         elif "amount" in kwargs:
             extra["amount"] = _serialize_value(kwargs["amount"])
+        get_event = super().get(*args, **kwargs)
         register_interaction(self._env, self, "get", extra_data=extra or None)
-        return super().get(*args, **kwargs)
+        return _attach_transaction_queue_tracker(self._env, self, get_event, wait_kind="get")
 
 
 class TrackedStore(OriginalStore):
@@ -544,12 +684,14 @@ class TrackedStore(OriginalStore):
             extra["item"] = _serialize_value(args[0])
         elif "item" in kwargs:
             extra["item"] = _serialize_value(kwargs["item"])
+        put_event = super().put(*args, **kwargs)
         register_interaction(self._env, self, "put", extra_data=extra or None)
-        return super().put(*args, **kwargs)
+        return _attach_transaction_queue_tracker(self._env, self, put_event, wait_kind="put")
 
     def get(self, *args, **kwargs):
+        get_event = super().get(*args, **kwargs)
         register_interaction(self._env, self, "get")
-        return super().get(*args, **kwargs)
+        return _attach_transaction_queue_tracker(self._env, self, get_event, wait_kind="get")
 
 
 class TrackedPriorityStore(OriginalPriorityStore):
@@ -567,12 +709,14 @@ class TrackedPriorityStore(OriginalPriorityStore):
             extra["item"] = _serialize_value(args[0])
         elif "item" in kwargs:
             extra["item"] = _serialize_value(kwargs["item"])
+        put_event = super().put(*args, **kwargs)
         register_interaction(self._env, self, "put", extra_data=extra or None)
-        return super().put(*args, **kwargs)
+        return _attach_transaction_queue_tracker(self._env, self, put_event, wait_kind="put")
 
     def get(self, *args, **kwargs):
+        get_event = super().get(*args, **kwargs)
         register_interaction(self._env, self, "get")
-        return super().get(*args, **kwargs)
+        return _attach_transaction_queue_tracker(self._env, self, get_event, wait_kind="get")
 
 
 class TrackedFilterStore(OriginalFilterStore):
@@ -590,8 +734,9 @@ class TrackedFilterStore(OriginalFilterStore):
             extra["item"] = _serialize_value(args[0])
         elif "item" in kwargs:
             extra["item"] = _serialize_value(kwargs["item"])
+        put_event = super().put(*args, **kwargs)
         register_interaction(self._env, self, "put", extra_data=extra or None)
-        return super().put(*args, **kwargs)
+        return _attach_transaction_queue_tracker(self._env, self, put_event, wait_kind="put")
 
     def get(self, *args, **kwargs):
         extra = {}
@@ -599,8 +744,9 @@ class TrackedFilterStore(OriginalFilterStore):
             extra["filter"] = _serialize_value(args[0])
         elif "filter" in kwargs:
             extra["filter"] = _serialize_value(kwargs["filter"])
+        get_event = super().get(*args, **kwargs)
         register_interaction(self._env, self, "get", extra_data=extra or None)
-        return super().get(*args, **kwargs)
+        return _attach_transaction_queue_tracker(self._env, self, get_event, wait_kind="get")
 
 
 class TrackedEnvironment(simpy.Environment):
@@ -613,6 +759,11 @@ class TrackedEnvironment(simpy.Environment):
     def step_count(self):
         """Public accessor for the step counter (use in breakpoints: env.step_count >= N)."""
         return self._step_count
+
+    def process(self, generator):
+        process = super().process(generator)
+        _ensure_process_state(self, process)
+        return process
 
     def step(self):
         self._step_count += 1

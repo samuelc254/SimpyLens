@@ -13,6 +13,7 @@ import pytest
 import simpy
 from simpylens.tracking_patch import (
     TrackingPatch,
+    PROCESS_STATES_ATTR,
     TRACKED_RESOURCES_ATTR,
     STEP_LOGS_ATTR,
 )
@@ -533,3 +534,90 @@ def test_step_logs_have_required_schema_fields():
         assert "event" in entry
         assert "time" in entry
         assert "level" in entry
+
+
+# ---------------------------------------------------------------------------
+# Task Viewer process state tracking
+# ---------------------------------------------------------------------------
+
+
+def test_root_process_is_registered_before_first_step():
+    env = simpy.Environment()
+
+    def worker(env):
+        yield env.timeout(1)
+
+    proc = env.process(worker(env))
+    process_states = getattr(env, PROCESS_STATES_ATTR)
+
+    assert proc in process_states
+    assert process_states[proc]["label"].startswith(proc.name)
+
+
+def test_resource_holding_tracks_only_granted_requests():
+    env = simpy.Environment()
+    res = simpy.Resource(env, capacity=1)
+
+    def worker(env):
+        req = res.request()
+        yield req
+        tracked_state = env.process_states[env.active_process]
+        assert res.visual_name in tracked_state["holding"]
+        assert res.visual_name not in tracked_state["queuing"]
+        yield env.timeout(1)
+        res.release(req)
+
+    env.process(worker(env))
+    env.run()
+
+
+def test_store_waiting_get_appears_only_in_queuing():
+    env = simpy.Environment()
+    store = simpy.Store(env, capacity=1)
+    snapshots = []
+
+    def consumer(env):
+        get_event = store.get()
+        tracked_state = env.process_states[env.active_process]
+        snapshots.append((set(tracked_state["holding"]), set(tracked_state["queuing"])))
+        yield get_event
+        snapshots.append((set(tracked_state["holding"]), set(tracked_state["queuing"])))
+
+    def producer(env):
+        yield env.timeout(1)
+        yield store.put("item")
+
+    env.process(consumer(env))
+    env.process(producer(env))
+    env.run()
+
+    assert snapshots[0][0] == set()
+    assert any("Waiting to Get" in value for value in snapshots[0][1])
+    assert snapshots[1][0] == set()
+    assert snapshots[1][1] == set()
+
+
+def test_container_waiting_put_appears_only_in_queuing():
+    env = simpy.Environment()
+    container = simpy.Container(env, capacity=1, init=1)
+    snapshots = []
+
+    def producer(env):
+        put_event = container.put(1)
+        tracked_state = env.process_states[env.active_process]
+        snapshots.append((set(tracked_state["holding"]), set(tracked_state["queuing"])))
+        yield put_event
+        snapshots.append((set(tracked_state["holding"]), set(tracked_state["queuing"])))
+
+    def consumer(env):
+        yield env.timeout(1)
+        yield container.get(1)
+
+    env.process(producer(env))
+    env.process(consumer(env))
+    env.run()
+
+    assert snapshots[0][0] == set()
+    assert any("Waiting to Put" in value for value in snapshots[0][1])
+    assert snapshots[1][0] == set()
+    assert snapshots[1][1] == set()
