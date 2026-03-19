@@ -64,7 +64,7 @@ This document describes the target architecture boundaries for SimpyLens v1.
 - `reset()` always recreates environment and reapplies seed.
 - Breakpoints must work in GUI and headless modes.
 - When `gui=True`, `Lens` manages viewer lifecycle and mainloop delegation.
-- `STEP_AFTER` logs are emitted for every processed simulation step.
+- `STEP` lifecycle logs (`START`, `ACTION`, `END`) are emitted for every processed simulation step.
 
 ## 6) Editor Integration Boundary
 

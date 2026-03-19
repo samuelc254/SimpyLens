@@ -577,6 +577,7 @@ class Viewer(tk.Tk):
             yscrollcommand=scrollbar.set,
         )
         self.txt_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.txt_log.bind("<Configure>", self._update_log_tabs)
         self.txt_log.tag_configure("log_find_match", background="#FFF59D")
         self.txt_log.tag_configure("log_find_current", background="#FBC02D")
         self.txt_log.tag_configure("log_link_base", foreground="#0b57d0", underline=True)
@@ -594,6 +595,19 @@ class Viewer(tk.Tk):
         self.log_find_popup.place_forget()
 
         scrollbar.config(command=self.txt_log.yview)
+
+    def _update_log_tabs(self, event):
+        widget_width = int(getattr(event, "width", 0)) - 25
+        if widget_width <= 0:
+            return
+
+        # Tk expects tabs as a Tcl list (distance, alignment, ...).
+        # Passing a single string like "956 right" is parsed as one token and fails.
+        try:
+            self.txt_log.config(tabs=(widget_width, "right"))
+        except tk.TclError:
+            # Ignore transient configure errors during rapid resize/destroy.
+            pass
 
     def _setup_breakpoint_panel(self):
         self.breakpoint_panel = ttk.Frame(self.main_area, relief="raised", borderwidth=1)
@@ -1111,11 +1125,16 @@ class Viewer(tk.Tk):
             return
 
         stop_index = f"{insert_at}+{len(rendered_line)}c"
-        start = self.txt_log.search(location_token, insert_at, stopindex=stop_index, exact=True)
+        tabbed_token = f"\t{location_token}"
+        start = self.txt_log.search(tabbed_token, insert_at, stopindex=stop_index, exact=True)
+        token_len = len(tabbed_token)
+        if not start:
+            start = self.txt_log.search(location_token, insert_at, stopindex=stop_index, exact=True)
+            token_len = len(location_token)
         if not start:
             return
 
-        end = f"{start}+{len(location_token)}c"
+        end = f"{start}+{token_len}c"
         tag_name = f"log_link_{self._next_log_link_id}"
         self._next_log_link_id += 1
 
@@ -1280,46 +1299,27 @@ class Viewer(tk.Tk):
 
         # --- STEP ---
         if kind == "STEP":
-            if event == "STEP_BEFORE":
+            if event == "START":
                 step = data.get("step", "?")
-                sim_ev = data.get("sim_event", "?")
-                extras = []
-                if "triggering" in data:
-                    extras.append(f"triggering={','.join(data['triggering'])}")
-                if "delay" in data:
-                    extras.append(f"delay={data['delay']}")
-                if "resource" in data:
-                    extras.append(f"resource={data['resource']}")
-                if "process" in data and "triggering" not in data:
-                    extras.append(f"process={data['process']}")
-                suffix = " | " + " | ".join(extras) if extras else ""
-                return _append_location(f"[{timestamp:.2f}] [STEP {step} \u2794] {sim_ev}{suffix}")
+                return _append_location(f"[{timestamp:.2f}] [STEP {step} \u25b6] {message}")
 
-            if event == "STEP_AFTER":
+            if event == "ACTION":
                 step = data.get("step", "?")
-                active = data.get("active_process", "-")
-                return _append_location(f"[{timestamp:.2f}] [STEP {step} \u2714] active={active}")
+                extras = []
+                if "amount" in data:
+                    extras.append(f"amount={data['amount']}")
+                if "item" in data:
+                    extras.append(f"item={_trunc(data['item'], 40)}")
+                if "filter" in data:
+                    extras.append(f"filter={_trunc(data['filter'], 40)}")
+                suffix = " | " + " | ".join(extras) if extras else ""
+                return _append_location(f"[{timestamp:.2f}] [STEP {step} \u21b3] {message}{suffix}")
+
+            if event == "END":
+                step = data.get("step", "?")
+                return _append_location(f"[{timestamp:.2f}] [STEP {step} \u2714] {message}")
 
             return f"[{timestamp:.2f}] [STEP] {message}"
-
-        # --- RESOURCE ---
-        if kind == "RESOURCE":
-            process_name = data.get("process", "?")
-            resource_name = data.get("resource", "?")
-            from_name = data.get("from", "?")
-            to_name = data.get("to", "?")
-            extras = []
-            if "amount" in data:
-                extras.append(f"amount={data['amount']}")
-            if "item" in data:
-                extras.append(f"item={_trunc(data['item'], 40)}")
-            if "filter" in data:
-                extras.append(f"filter={_trunc(data['filter'], 40)}")
-            suffix = " | " + " | ".join(extras) if extras else ""
-            move = f"({from_name} \u2192 {to_name})"
-            if message:
-                return _append_location(f"[{timestamp:.2f}] [RESOURCE] {message}  {move}{suffix}")
-            return _append_location(f"[{timestamp:.2f}] [RESOURCE] {process_name} {event.lower()} {resource_name}  {move}{suffix}")
 
         # --- BREAKPOINT ---
         if kind == "BREAKPOINT":

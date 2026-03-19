@@ -400,6 +400,36 @@ def _extract_process_source_location(process):
         return {}
 
 
+def _describe_process_target(target):
+    if target is None:
+        return "-"
+
+    try:
+        event_name = type(target).__name__
+    except Exception:
+        return str(target)
+
+    if event_name == "Timeout":
+        delay = getattr(target, "_delay", None)
+        if delay is not None:
+            return f"Timeout({delay})"
+        return "Timeout"
+
+    if event_name in {"Request", "PriorityRequest", "PreemptiveRequest"}:
+        return "Request"
+
+    if event_name.endswith("Put"):
+        return "Put"
+
+    if event_name.endswith("Get"):
+        return "Get"
+
+    if event_name == "Condition":
+        return "Condition"
+
+    return event_name
+
+
 def _resolve_process_from_event(event):
     """Best-effort process discovery for the next event queued in the environment."""
     if event is None:
@@ -439,18 +469,17 @@ def register_interaction(env, resource_instance, action, extra_data=None):
     pending_transfers = getattr(state, PENDING_TRANSFERS_ATTR)
 
     process = env.active_process
-    process_name = _process_label(process)
-    _ensure_process_state(env, process)
+    tracked_process = _ensure_process_state(env, process) or {}
+    process_label = tracked_process.get("label") or _process_label(process)
     source_location = _extract_process_source_location(process)
-    setattr(state, LAST_PROCESS_NAME_ATTR, process_name)
+    setattr(state, LAST_PROCESS_NAME_ATTR, process_label)
     current_name = getattr(resource_instance, "visual_name", str(resource_instance))
     previous_resource = _resolve_process_resource(env, process)
-    action_name = str(action).lower()
-    event_name = _action_to_event(action_name)
+    action_type = str(action).lower()
 
-    if action_name == "request":
+    if action_type == "request":
         _track_process_queuing(env, process, current_name)
-    elif action_name == "release":
+    elif action_type == "release":
         _track_process_released(env, process, current_name)
 
     if previous_resource is None:
@@ -458,11 +487,13 @@ def register_interaction(env, resource_instance, action, extra_data=None):
     else:
         previous_name = getattr(previous_resource, "visual_name", str(previous_resource))
 
-    if action_name == "release":
+    if action_type == "release":
         from_name = previous_name if previous_resource is not None else current_name
         data = {
+            "step": int(getattr(env, "step_count", 0)),
+            "action_type": action_type,
             "resource": current_name,
-            "process": process_name,
+            "process": process_label,
             "from": from_name,
             "to": "<IDLE>",
         }
@@ -472,12 +503,12 @@ def register_interaction(env, resource_instance, action, extra_data=None):
             data.update(extra_data)
         payload = {
             "schema_version": "1.0",
-            "kind": "RESOURCE",
-            "event": event_name,
+            "kind": "STEP",
+            "event": "ACTION",
             "time": env.now,
             "level": "INFO",
             "source": "tracking",
-            "message": f"{process_name} released {current_name}",
+            "message": f"{process_label} released {current_name}",
             "data": data,
         }
         step_logs.append(_format_payload(payload))
@@ -485,8 +516,10 @@ def register_interaction(env, resource_instance, action, extra_data=None):
         return
 
     data = {
+        "step": int(getattr(env, "step_count", 0)),
+        "action_type": action_type,
         "resource": current_name,
-        "process": process_name,
+        "process": process_label,
         "from": previous_name,
         "to": current_name,
     }
@@ -495,19 +528,19 @@ def register_interaction(env, resource_instance, action, extra_data=None):
     if extra_data:
         data.update(extra_data)
 
-    if action_name == "request":
-        message = f"{process_name} requested {current_name}"
-    elif action_name == "put":
-        message = f"{process_name} put into {current_name}"
-    elif action_name == "get":
-        message = f"{process_name} got from {current_name}"
+    if action_type == "request":
+        message = f"{process_label} requested {current_name}"
+    elif action_type == "put":
+        message = f"{process_label} put into {current_name}"
+    elif action_type == "get":
+        message = f"{process_label} got from {current_name}"
     else:
-        message = f"{process_name} {action_name} {current_name}"
+        message = f"{process_label} {action_type} {current_name}"
 
     payload = {
         "schema_version": "1.0",
-        "kind": "RESOURCE",
-        "event": event_name,
+        "kind": "STEP",
+        "event": "ACTION",
         "time": env.now,
         "level": "INFO",
         "source": "tracking",
@@ -523,7 +556,7 @@ def register_interaction(env, resource_instance, action, extra_data=None):
 
             # A get operation moves data/item from the resource back to where the
             # process previously was represented, so invert the animation direction.
-            is_get = action_name == "get"
+            is_get = action_type == "get"
             is_store_or_container = bool(
                 getattr(resource_instance, "visual_type", "") in {"STORE", "PRIORITY_STORE", "FILTER_STORE", "CONTAINER"}
                 or resource_instance.__class__.__name__.endswith("Store")
@@ -536,8 +569,8 @@ def register_interaction(env, resource_instance, action, extra_data=None):
                 {
                     "from": transfer_from,
                     "to": transfer_to,
-                    "item": process_name,
-                    "action": action_name,
+                    "item": process_label,
+                    "action": action_type,
                 }
             )
 
@@ -772,134 +805,135 @@ class TrackedEnvironment(simpy.Environment):
         step_logs = self.step_logs
         step_num = self._step_count
 
-        # --- Inspect the next event before executing it ---
-        data_before = {"step": step_num}
-        triggering_processes = []
-        triggering_process_objects = []
+        event = None
+        sim_event_name = "EMPTY_QUEUE"
         event_queue = getattr(self, "_queue", [])
-
         if event_queue:
             try:
-                next_item = event_queue[0]
-                event = next_item[3]
-                source_process = _resolve_process_from_event(event)
-                source_location = _extract_process_source_location(source_process)
-                if source_location:
-                    data_before.update(source_location)
-
+                event = event_queue[0][3]
                 sim_event_name = type(event).__name__
-                data_before["sim_event"] = sim_event_name
-                self.last_event_name = sim_event_name
+            except Exception:
+                event = None
+                sim_event_name = "UNKNOWN"
+        self.last_event_name = sim_event_name
 
-                if sim_event_name == "Timeout":
-                    data_before["delay"] = getattr(event, "_delay", None)
+        callbacks = getattr(event, "callbacks", None)
+        has_process_callbacks = False
 
-                if hasattr(event, "resource"):
-                    resource = event.resource
-                    resource_name = getattr(resource, "visual_name", str(resource))
-                    data_before["resource"] = resource_name
+        if callbacks:
+            original_callbacks = list(callbacks)
+            wrapped_callbacks = []
 
-                if sim_event_name == "Process" and hasattr(event, "name"):
-                    data_before["process"] = event.name
+            for _cb in original_callbacks:
+                owner = getattr(_cb, "__self__", None)
+                process_obj = owner if isinstance(owner, simpy.Process) else None
 
-                if hasattr(event, "callbacks") and event.callbacks:
-                    waiting_processes = []
-                    for callback in event.callbacks:
-                        obj = getattr(callback, "__self__", None)
-                        if hasattr(obj, "name"):
-                            triggering_process_objects.append(obj)
-                            process_name = obj.name
-                            if not process_name and hasattr(obj, "__self__"):
-                                owner = obj.__self__
-                                if hasattr(owner, "name"):
-                                    process_name = owner.name
-                            if process_name:
-                                waiting_processes.append(process_name)
+                if process_obj is None:
+                    wrapped_callbacks.append(_cb)
+                    continue
 
-                    if waiting_processes:
-                        triggering_processes = list(waiting_processes)
-                        data_before["triggering"] = waiting_processes
-            except Exception as exc:
-                data_before["sim_event"] = "UNKNOWN"
-                data_before["inspect_error"] = str(exc)
-                self.last_event_name = "UNKNOWN"
-        else:
-            data_before["sim_event"] = "EMPTY_QUEUE"
-            self.last_event_name = "EMPTY_QUEUE"
+                has_process_callbacks = True
 
-        # Build human-readable message for STEP_BEFORE
-        sim_ev = data_before.get("sim_event", "?")
-        msg_parts = [f"Step {step_num}: {sim_ev}"]
-        if "triggering" in data_before:
-            msg_parts.append(f"triggering={','.join(data_before['triggering'])}")
-        if "delay" in data_before:
-            msg_parts.append(f"delay={data_before['delay']}")
-        if "resource" in data_before:
-            msg_parts.append(f"resource={data_before['resource']}")
-        if "process" in data_before and "triggering" not in data_before:
-            msg_parts.append(f"process={data_before['process']}")
+                def _wrapped(evt, _cb=_cb, _process=process_obj, _event_name=sim_event_name):
+                    tracked_state = _ensure_process_state(self, _process) or {}
+                    process_label = tracked_state.get("label") or _process_label(_process)
 
-        step_logs.append(
-            _format_payload(
-                {
-                    "schema_version": "1.0",
-                    "kind": "STEP",
-                    "event": "STEP_BEFORE",
-                    "time": self.now,
-                    "level": "DEBUG",
-                    "source": "tracking",
-                    "message": " | ".join(msg_parts),
-                    "data": data_before,
-                }
+                    start_data = {
+                        "step": step_num,
+                        "sim_event": _event_name,
+                        "process": process_label,
+                    }
+                    start_location = _extract_process_source_location(_process)
+                    if start_location:
+                        start_data.update(start_location)
+
+                    step_logs.append(
+                        _format_payload(
+                            {
+                                "schema_version": "1.0",
+                                "kind": "STEP",
+                                "event": "START",
+                                "time": self.now,
+                                "level": "DEBUG",
+                                "source": "tracking",
+                                "message": f"Waking up '{process_label}' (Triggered by: {_event_name})",
+                                "data": start_data,
+                            }
+                        )
+                    )
+
+                    _cb(evt)
+
+                    end_data = {
+                        "step": step_num,
+                        "sim_event": _event_name,
+                        "process": process_label,
+                    }
+                    if not bool(getattr(_process, "is_alive", False)):
+                        end_message = f"Process '{process_label}' terminated"
+                    else:
+                        target_description = _describe_process_target(getattr(_process, "target", None))
+                        end_data["target"] = target_description
+                        end_message = f"Suspending '{process_label}' (Yielding on: {target_description})"
+
+                    end_location = _extract_process_source_location(_process)
+                    if end_location:
+                        end_data.update(end_location)
+
+                    self.last_process_name = process_label
+                    step_logs.append(
+                        _format_payload(
+                            {
+                                "schema_version": "1.0",
+                                "kind": "STEP",
+                                "event": "END",
+                                "time": self.now,
+                                "level": "DEBUG",
+                                "source": "tracking",
+                                "message": end_message,
+                                "data": end_data,
+                            }
+                        )
+                    )
+
+                wrapped_callbacks.append(_wrapped)
+
+            callbacks[:] = wrapped_callbacks
+
+        if not has_process_callbacks:
+            step_logs.append(
+                _format_payload(
+                    {
+                        "schema_version": "1.0",
+                        "kind": "STEP",
+                        "event": "START",
+                        "time": self.now,
+                        "level": "DEBUG",
+                        "source": "tracking",
+                        "message": f"Processing internal event: {sim_event_name}",
+                        "data": {"step": step_num, "sim_event": sim_event_name},
+                    }
+                )
             )
-        )
 
         super().step()
 
-        # --- After-step: check if active process differs from expected ---
-        active_process_name = None
-        active_process_obj = None
-        if self.active_process:
-            active_process_obj = self.active_process
-            active_process_name = self.active_process.name
-        elif triggering_processes:
-            active_process_name = ",".join(triggering_processes)
-            if len(triggering_process_objects) == 1:
-                active_process_obj = triggering_process_objects[0]
-
-        before_expected_process = None
-        if triggering_processes:
-            before_expected_process = ",".join(triggering_processes)
-        elif data_before.get("process"):
-            before_expected_process = str(data_before["process"])
-
-        effective_after_process = active_process_name or "-"
-        effective_before_process = before_expected_process or "-"
-        self.last_process_name = None if effective_after_process == "-" else effective_after_process
-
-        data_after = {
-            "step": step_num,
-            "active_process": effective_after_process,
-            "previous_process": effective_before_process,
-        }
-        active_source_location = _extract_process_source_location(active_process_obj)
-        if active_source_location:
-            data_after.update(active_source_location)
-
-        step_logs.append(
-            _format_payload(
-                {
-                    "schema_version": "1.0",
-                    "kind": "STEP",
-                    "event": "STEP_AFTER",
-                    "time": self.now,
-                    "level": "DEBUG",
-                    "source": "tracking",
-                    "message": f"Step {step_num}: active={effective_after_process}",
-                    "data": data_after,
-                }
+        if not has_process_callbacks:
+            self.last_process_name = None
+            step_logs.append(
+                _format_payload(
+                    {
+                        "schema_version": "1.0",
+                        "kind": "STEP",
+                        "event": "END",
+                        "time": self.now,
+                        "level": "DEBUG",
+                        "source": "tracking",
+                        "message": "Step completed",
+                        "data": {"step": step_num, "sim_event": sim_event_name},
+                    }
+                )
             )
-        )
 
 
 def _apply_tracking_patch():

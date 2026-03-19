@@ -25,8 +25,7 @@ This document defines the v1 logging contract, JSON envelope, event taxonomy, an
 
 - Use `snake_case` for keys.
 - Use uppercase with `_` for `kind` and `event` values.
-- Existing event names must remain stable in v1.
-- New fields must be backward-compatible additions only.
+- Additive field evolution should remain backward compatible.
 
 ### Runtime Behavior
 
@@ -65,12 +64,9 @@ Only envelope fields belong at root level. All event-specific payload data must 
 |---|---|---|---|
 | `SIM` | `RESET` | `lens` | Simulation reset. |
 | `SIM` | `RUN_COMPLETE` | `lens` | Simulation finished (empty schedule). |
-| `STEP` | `STEP_BEFORE` | `tracking` | Before one SimPy step. |
-| `STEP` | `STEP_AFTER` | `tracking` | After every SimPy step. |
-| `RESOURCE` | `REQUEST` | `tracking` | Process requested a resource. |
-| `RESOURCE` | `RELEASE` | `tracking` | Process released a resource. |
-| `RESOURCE` | `PUT` | `tracking` | Put item/amount into Store/Container. |
-| `RESOURCE` | `GET` | `tracking` | Got item/amount from Store/Container. |
+| `STEP` | `START` | `tracking` | Start of one process wake-up within a SimPy step. Multiple START entries may share the same `step`. |
+| `STEP` | `ACTION` | `tracking` | Interaction within the current step (request/release/put/get). |
+| `STEP` | `END` | `tracking` | End of one process wake-up within a SimPy step. Multiple END entries may share the same `step`. |
 | `BREAKPOINT` | `BREAKPOINT_HIT` | `lens` | Breakpoint condition matched. |
 | `BREAKPOINT` | `BREAKPOINT_ERROR` | `lens` | Breakpoint evaluation error. |
 | `STATUS` | `MESSAGE` | `lens` | Generic fallback message. |
@@ -91,43 +87,30 @@ Only envelope fields belong at root level. All event-specific payload data must 
 "data": null
 ```
 
-### `STEP / STEP_BEFORE`
+### `STEP / START`
 
 ```json
 "data": {
   "step": 3,
   "sim_event": "Timeout",
-  "delay": 1.5,
-  "resource": "counter",
-  "process": "customer",
-  "triggering": ["customer", "source"],
+  "process": "customer#1",
   "file": "/path/to/model.py",
   "line": 37
 }
 ```
 
-Optional fields must be included only when applicable.
+`process` is the unique process label from tracking state (same identity used in Task Viewer).
+`file` and `line` are present when the callback resumes a process.
+Broadcast events can generate multiple sequential `START` entries for the same `step`.
 
-### `STEP / STEP_AFTER`
+### `STEP / ACTION`
 
 ```json
 "data": {
   "step": 3,
-  "active_process": "customer",
-  "previous_process": "customer",
-  "file": "/path/to/model.py",
-  "line": 37
-}
-```
-
-`active_process` can be `"-"` when no process is active.
-
-### `RESOURCE / REQUEST` and `RESOURCE / RELEASE`
-
-```json
-"data": {
+  "action_type": "request",
   "resource": "counter",
-  "process": "customer",
+  "process": "customer#1",
   "from": "<START>",
   "to": "counter",
   "file": "/path/to/model.py",
@@ -135,23 +118,30 @@ Optional fields must be included only when applicable.
 }
 ```
 
-For releases, `to` should be `"<IDLE>"`.
+For release actions, `to` should be `"<IDLE>"`.
 
-### `RESOURCE / PUT` and `RESOURCE / GET`
+For Container/Store interactions, include optional fields only when present:
+
+- `amount` for `Container`
+- `item` for `Store` / `PriorityStore`
+- `filter` for `FilterStore.get(...)`
+
+### `STEP / END`
 
 ```json
 "data": {
-  "resource": "warehouse",
-  "process": "producer",
-  "from": "<START>",
-  "to": "warehouse",
-  "amount": 5,
+  "step": 3,
+  "sim_event": "Timeout",
+  "process": "customer#1",
+  "target": "Request",
   "file": "/path/to/model.py",
-  "line": 37
+  "line": 41
 }
 ```
 
-Use `amount` (`Container`), `item` (`Store`), or `filter` (`FilterStore`) only when present.
+If the process terminated, `target` can be omitted and the message states termination.
+`file` and `line` are captured after the step completes so they point to the new suspension location.
+Broadcast events can generate multiple sequential `END` entries for the same `step`.
 
 ### `BREAKPOINT / BREAKPOINT_HIT`
 
@@ -201,7 +191,7 @@ Use `amount` (`Container`), `item` (`Store`), or `filter` (`FilterStore`) only w
 }
 ```
 
-### `STEP / STEP_BEFORE`
+### `STEP / START`
 
 ```json
 {
@@ -209,81 +199,62 @@ Use `amount` (`Container`), `item` (`Store`), or `filter` (`FilterStore`) only w
   "seq": 5,
   "time": 0.0,
   "kind": "STEP",
-  "event": "STEP_BEFORE",
+  "event": "START",
   "level": "DEBUG",
   "source": "tracking",
-  "message": "Step 3: Timeout | triggering=customer",
+  "message": "Waking up 'customer#1' (Triggered by: Timeout)",
   "data": {
     "step": 3,
     "sim_event": "Timeout",
-    "delay": 1.5,
-    "triggering": ["customer"],
+    "process": "customer#1",
     "file": "examples/pottery_factory.py",
     "line": 37
   }
 }
 ```
 
-### `STEP / STEP_AFTER`
-
-```json
-{
-  "schema_version": "1.0",
-  "seq": 6,
-  "time": 1.5,
-  "kind": "STEP",
-  "event": "STEP_AFTER",
-  "level": "DEBUG",
-  "source": "tracking",
-  "message": "Step 3: active=customer",
-  "data": {
-    "step": 3,
-    "active_process": "customer",
-    "previous_process": "customer",
-    "file": "examples/pottery_factory.py",
-    "line": 37
-  }
-}
-```
-
-### `RESOURCE / REQUEST`
+### `STEP / ACTION`
 
 ```json
 {
   "schema_version": "1.0",
   "seq": 8,
   "time": 0.0,
-  "kind": "RESOURCE",
-  "event": "REQUEST",
+  "kind": "STEP",
+  "event": "ACTION",
   "level": "INFO",
   "source": "tracking",
-  "message": "customer requested counter",
+  "message": "customer#1 requested counter",
   "data": {
+    "step": 3,
+    "action_type": "request",
     "resource": "counter",
-    "process": "customer",
+    "process": "customer#1",
     "from": "<START>",
     "to": "counter"
   }
 }
 ```
 
-### `RESOURCE / RELEASE`
+### `STEP / END`
 
 ```json
 {
   "schema_version": "1.0",
-  "seq": 12,
-  "time": 3.86,
-  "kind": "RESOURCE",
-  "event": "RELEASE",
-  "level": "INFO",
+  "seq": 9,
+  "time": 0.0,
+  "kind": "STEP",
+  "event": "END",
+  "level": "DEBUG",
   "source": "tracking",
-  "message": "customer released counter",
+  "message": "Process 'customer#1' suspended ➔ Yielding on Request",
   "data": {
-    "resource": "counter",
-    "process": "customer",
-    "from": "counter",
-    "to": "<IDLE>"
+    "step": 3,
+    "sim_event": "Timeout",
+    "process": "customer#1",
+    "target": "Request",
+    "file": "examples/pottery_factory.py",
+    "line": 41
   }
 }
 ```
@@ -318,7 +289,7 @@ Logs must be rendered as formatted text lines, never raw JSON.
 Display template:
 
 ```text
-[TIME] [KIND] MESSAGE | KEY=VALUE | KEY=VALUE
+[TIME] [KIND] MESSAGE\tFILE:LINE
 ```
 
 ### Event-specific line examples
@@ -335,66 +306,28 @@ Display template:
 [120.50] [SIM] Simulation complete
 ```
 
-- `STEP / STEP_BEFORE`
+- `STEP / START`
 
 ```text
-[0.00] [STEP 3 ➔] Timeout | triggering=customer | delay=1.5 | pottery_factory.py:37
-[0.00] [STEP 4 ➔] Request | resource=counter | triggering=customer | pottery_factory.py:41
-[3.86] [STEP 8 ➔] Release | resource=counter | pottery_factory.py:49
-[3.86] [STEP 9 ➔] Process | process=customer | pottery_factory.py:50
+[0.00] [STEP 3 ▶] Waking up 'customer#1' (Triggered by: Condition)\tpottery_factory.py:37
+[0.00] [STEP 3 ▶] Waking up 'supplier#2' (Triggered by: Condition)\tpottery_factory.py:61
+[3.86] [STEP 8 ▶] Processing internal event: Release
 ```
 
-- `STEP / STEP_AFTER`
+- `STEP / ACTION`
 
 ```text
-[3.86] [STEP 8 ✔] active=customer | pottery_factory.py:49
+[0.00] [STEP 3 ↳] customer#1 requested counter\tpottery_factory.py:38
+[5.00] [STEP 9 ↳] producer#4 put into warehouse | amount=5\tpottery_factory.py:64
 ```
 
-- `RESOURCE / REQUEST`
+- `STEP / END`
 
 ```text
-[0.00] [RESOURCE] customer requested counter (<START> -> counter) | pottery_factory.py:41
+[0.00] [STEP 3 ✔] Process 'customer#1' suspended ➔ Yielding on Request\tpottery_factory.py:41
+[0.00] [STEP 3 ✔] Process 'supplier#2' suspended ➔ Yielding on Timeout(2)\tpottery_factory.py:66
+[3.86] [STEP 8 ✔] Process 'customer#1' terminated\tpottery_factory.py:49
 ```
-
-- `RESOURCE / RELEASE`
-
-```text
-[3.86] [RESOURCE] customer released counter (counter -> <IDLE>) | pottery_factory.py:49
-```
-
-- `RESOURCE / PUT`
-
-```text
-[5.00] [RESOURCE] producer put into warehouse (<START> -> warehouse) | amount=5 | pottery_factory.py:64
-```
-
-- `RESOURCE / GET`
-
-```text
-[6.00] [RESOURCE] consumer got from warehouse (warehouse -> <IDLE>) | pottery_factory.py:71
-```
-
-## 8) Clickable Source Location in Viewer
-
-When `data.file` and `data.line` are available, viewer rendering appends a location token in the format:
-
-```text
-<filename>:<line>
-```
-
-Example:
-
-```text
-[1.00] [STEP 3 ✔] active=worker | pottery_factory.py:78
-```
-
-The location token is clickable in the Tkinter log panel. Clicking it attempts to open the configured editor at the exact line.
-
-Editor command resolution order:
-
-1. Read `SIMPYLENS_EDITOR` (if set), otherwise default to `code`.
-2. Invoke the editor via `subprocess`.
-3. On failure, copy `file:line` to clipboard and print a terminal warning.
 
 - `BREAKPOINT / BREAKPOINT_HIT`
 
@@ -414,9 +347,29 @@ Editor command resolution order:
 [0.00] [STATUS] <free text>
 ```
 
+## 8) Clickable Source Location in Viewer
+
+When `data.file` and `data.line` are available, viewer rendering appends a location token in the format:
+
+```text
+<filename>:<line>
+```
+
+Example:
+
+```text
+[1.00] [STEP 3 ✔] Process 'worker#7' suspended ➔ Yielding on Timeout(1)\tpottery_factory.py:78
+```
+
+The location token is clickable in the Tkinter log panel. Clicking it attempts to open the configured editor at the exact line.
+
+Editor command resolution order:
+
+1. Read `SIMPYLENS_EDITOR` (if set), otherwise default to `code`.
+2. Invoke the editor via `subprocess`.
+3. On failure, copy `file:line` to clipboard and print a terminal warning.
+
 ### General Viewer Rules
 
 1. Never show raw JSON in the log panel.
 2. Preserve insertion order (`seq`) in display.
-3. Use envelope `message` as the primary line text.
-4. Show internal STEP events (`Condition`, `Initialize`) with lower visual emphasis.
