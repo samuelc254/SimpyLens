@@ -74,7 +74,7 @@ def _ensure_process_state(env, process):
 
     process_name = _process_label(process)
     name_counters = getattr(state, PROCESS_NAME_COUNTERS_ATTR)
-    next_idx = int(name_counters.get(process_name, 0)) + 1
+    next_idx = int(name_counters.get(process_name, -1)) + 1
     name_counters[process_name] = next_idx
 
     creation_order = int(getattr(state, PROCESS_CREATION_COUNTER_ATTR, 0)) + 1
