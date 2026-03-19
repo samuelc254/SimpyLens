@@ -2,7 +2,7 @@
 Tests for TrackingPatch – verifies that:
 1. Native SimPy functionality is NOT broken after patching.
 2. Resources are registered in the environment's tracked_resources set.
-3. Interaction logs (REQUEST, RELEASE, PUT, GET) are generated correctly.
+3. Interaction logs are generated as STEP/ACTION entries with action_type.
 4. Special cases such as FilterStore filters, PriorityResource ordering, and
    PreemptiveResource preemption all continue to work as expected.
 5. TrackingPatch.apply() is idempotent.
@@ -53,6 +53,10 @@ def _parse_logs(env) -> list:
 
 def _events_of_kind(env, event_name: str) -> list:
     return [log for log in _parse_logs(env) if log.get("event") == event_name]
+
+
+def _step_actions_of_type(env, action_type: str) -> list:
+    return [log for log in _parse_logs(env) if log.get("kind") == "STEP" and log.get("event") == "ACTION" and (log.get("data") or {}).get("action_type") == action_type]
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +196,7 @@ def test_filter_store_has_visual_type():
 
 
 # ---------------------------------------------------------------------------
-# Interaction log generation (REQUEST / RELEASE)
+# Interaction log generation (STEP / ACTION)
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +212,7 @@ def test_resource_request_generates_log():
         env.process(worker(env))
 
     env = _sim(model)
-    assert len(_events_of_kind(env, "REQUEST")) >= 1
+    assert len(_step_actions_of_type(env, "request")) >= 1
 
 
 def test_resource_release_generates_log():
@@ -224,7 +228,7 @@ def test_resource_release_generates_log():
         env.process(worker(env))
 
     env = _sim(model)
-    assert len(_events_of_kind(env, "RELEASE")) >= 1
+    assert len(_step_actions_of_type(env, "release")) >= 1
 
 
 def test_request_log_contains_resource_and_process():
@@ -239,7 +243,7 @@ def test_request_log_contains_resource_and_process():
         env.process(worker(env))
 
     env = _sim(model)
-    request_logs = _events_of_kind(env, "REQUEST")
+    request_logs = _step_actions_of_type(env, "request")
     assert len(request_logs) >= 1
     entry = request_logs[0]
     assert "resource" in entry.get("data", {})
@@ -247,7 +251,7 @@ def test_request_log_contains_resource_and_process():
 
 
 # ---------------------------------------------------------------------------
-# Interaction log generation (PUT / GET)
+# Interaction log generation (STEP / ACTION put/get)
 # ---------------------------------------------------------------------------
 
 
@@ -261,7 +265,7 @@ def test_store_put_generates_log():
         env.process(producer(env))
 
     env = _sim(model)
-    assert len(_events_of_kind(env, "PUT")) >= 1
+    assert len(_step_actions_of_type(env, "put")) >= 1
 
 
 def test_store_get_generates_log():
@@ -279,7 +283,7 @@ def test_store_get_generates_log():
         env.process(consumer(env))
 
     env = _sim(model)
-    assert len(_events_of_kind(env, "GET")) >= 1
+    assert len(_step_actions_of_type(env, "get")) >= 1
 
 
 def test_container_put_and_get_generate_logs():
@@ -297,8 +301,8 @@ def test_container_put_and_get_generate_logs():
         env.process(consumer(env))
 
     env = _sim(model)
-    assert len(_events_of_kind(env, "PUT")) >= 1
-    assert len(_events_of_kind(env, "GET")) >= 1
+    assert len(_step_actions_of_type(env, "put")) >= 1
+    assert len(_step_actions_of_type(env, "get")) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +492,7 @@ def test_step_before_event_logged():
         env.process(proc(env))
 
     env = _sim(model)
-    step_befores = _events_of_kind(env, "STEP_BEFORE")
+    step_befores = _events_of_kind(env, "START")
     assert len(step_befores) >= 1
 
 
@@ -500,7 +504,7 @@ def test_step_after_event_always_logged():
         env.process(proc(env))
 
     env = _sim(model)
-    step_afters = _events_of_kind(env, "STEP_AFTER")
+    step_afters = _events_of_kind(env, "END")
     assert len(step_afters) >= 1
 
 
@@ -513,7 +517,7 @@ def test_step_after_includes_source_location_when_process_resumes():
         env.process(proc(env))
 
     env = _sim(model)
-    step_afters = _events_of_kind(env, "STEP_AFTER")
+    step_afters = _events_of_kind(env, "END")
     entries_with_location = [entry for entry in step_afters if isinstance(entry.get("data", {}).get("line"), int) and entry.get("data", {}).get("file")]
 
     assert entries_with_location

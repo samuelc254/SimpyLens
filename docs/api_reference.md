@@ -68,6 +68,15 @@ def model(env: simpy.Environment):
 - `get_logs()` returns a JSON-serializable list snapshot.
 - `set_log_capacity(capacity)` updates bounded log capacity (default `1000`).
 
+### Log Event Contract (`get_logs()`)
+
+- Log envelope fields are defined in [docs/logging_schema.md](docs/logging_schema.md).
+- Step lifecycle uses `kind="STEP"` with:
+  - `event="START"` for process wake-up or internal event start.
+  - `event="ACTION"` for interactions (`request`, `release`, `put`, `get`) via `data.action_type`.
+  - `event="END"` for process suspension/termination or internal event end.
+- Interaction type is not encoded in `event` anymore. Consumers should filter `ACTION` by `data.action_type`.
+
 ## GUI Inspector Tabs (Internal Viewer UI)
 
 When `gui=True`, the internal Inspector panel contains two tabs:
