@@ -6,7 +6,6 @@ class FakeTextWidget:
         self.text = text
         self.state = "normal"
         self.tags = {}
-        self.last_seen = None
 
     def cget(self, key):
         if key == "state":
@@ -53,7 +52,7 @@ class FakeTextWidget:
             walked = next_walked
         return f"{len(lines)}.{len(lines[-1])}"
 
-    def search(self, query, start, stopindex=None, nocase=False):
+    def search(self, query, start, _stopindex=None, nocase=False):
         start_offset = self._to_offset(start)
         haystack = self.text
         needle = query
@@ -72,7 +71,7 @@ class FakeTextWidget:
         self.tags.setdefault(tag_name, []).append((start, end))
 
     def see(self, index):
-        self.last_seen = index
+        pass
 
 
 def test_refresh_and_counter_callback_case_insensitive():

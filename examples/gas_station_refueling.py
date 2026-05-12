@@ -35,7 +35,6 @@ CAR_TANK_LEVEL = [5, 25]   # Min/max levels of car fuel tanks (liters)
 REFUELING_SPEED = 2        # Rate of refuelling car fuel tank (liters / second)
 TANK_TRUCK_TIME = 300      # Time it takes tank truck to arrive (seconds)
 T_INTER = [30, 300]        # Interval between car arrivals [min, max] (seconds)
-SIM_TIME = 1000            # Simulation time (seconds)
 # fmt: on
 
 

@@ -55,7 +55,7 @@ class TextSearchController:
         start = "1.0"
         query_len = len(query)
         while True:
-            pos = self.text_widget.search(query, start, stopindex=tk.END, nocase=True)
+            pos = self.text_widget.search(query, start, tk.END, nocase=True)
             if not pos:
                 break
             end_pos = f"{pos}+{query_len}c"
@@ -85,11 +85,6 @@ class TextSearchController:
         self.text_widget.tag_add(self.current_tag, start, end)
         self.text_widget.see(start)
         self._notify()
-
-    def highlight_current(self):
-        was_disabled = self._set_editable()
-        self._highlight_current_inner()
-        self._restore_state(was_disabled)
 
     def find_next(self, query):
         self.refresh(query, reset_index=False)

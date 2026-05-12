@@ -15,7 +15,6 @@ class CanvasView(tk.Frame):
         self.scale = 1.0
         self.offset_x = 0.0
         self.offset_y = 0.0
-        self.active_animations = []
         self.active_list_widgets = {}
         self.manual_block_positions = weakref.WeakKeyDictionary()
         self._reset_scene_caches()
@@ -29,8 +28,6 @@ class CanvasView(tk.Frame):
         self.right_press_resource = None
         self.right_press_canvas_x = 0.0
         self.right_press_canvas_y = 0.0
-        self.right_press_root_x = 0
-        self.right_press_root_y = 0
         self.right_press_moved = False
 
         self._build_widgets()
@@ -224,8 +221,6 @@ class CanvasView(tk.Frame):
         self.right_press_resource = resource
         self.right_press_canvas_x = cx
         self.right_press_canvas_y = cy
-        self.right_press_root_x = event.x_root
-        self.right_press_root_y = event.y_root
         self.right_press_moved = False
         self.start_pan(event)
         self.pan_active = True
@@ -322,7 +317,6 @@ class CanvasView(tk.Frame):
         pending_transfers = self.app.get_pending_transfers()
         if pending_transfers:
             pending_transfers.clear()
-        self.active_animations = []
         gc.collect()
 
         # First pass at scale=1.0 to measure content bounding box
@@ -519,14 +513,14 @@ class CanvasView(tk.Frame):
             y = (y_world * self.scale) + self.offset_y
 
             self.resource_world_positions[resource] = (x_world, y_world)
-            self._draw_block_for_resource(resource, x, y, i, resource_list, currently_active_ids, is_manual=False)
+            self._draw_block_for_resource(resource, x, y, i, currently_active_ids, is_manual=False)
 
         for i, resource in enumerate(manual_resources):
             x_world, y_world = self.manual_block_positions.get(resource, (50.0, 50.0))
             x = (x_world * self.scale) + self.offset_x
             y = (y_world * self.scale) + self.offset_y
             self.resource_world_positions[resource] = (x_world, y_world)
-            self._draw_block_for_resource(resource, x, y, i, resource_list, currently_active_ids, is_manual=True)
+            self._draw_block_for_resource(resource, x, y, i, currently_active_ids, is_manual=True)
 
         for resource_id in previously_active_ids:
             if resource_id not in currently_active_ids:
@@ -535,7 +529,7 @@ class CanvasView(tk.Frame):
                     widget.destroy()
                 del self.active_list_widgets[resource_id]
 
-    def _draw_block_for_resource(self, resource, x, y, index, current_list, currently_active_ids, is_manual=False):
+    def _draw_block_for_resource(self, resource, x, y, index, currently_active_ids, is_manual=False):
         base_h = 100 * self.scale
         current_h = base_h
         expanded = getattr(resource, "is_expanded", False)

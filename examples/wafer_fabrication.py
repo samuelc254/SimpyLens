@@ -34,8 +34,6 @@ logging.basicConfig(level=logging.INFO, format="[%(sim_time)07.2f] %(levelname)s
 @dataclass
 class Wafer:
     id: str
-    layer_count: int = 0
-    is_defective: bool = False
 
 
 @dataclass
@@ -65,13 +63,11 @@ class SemiconductorFab:
         self.steppers = simpy.PreemptiveResource(env, capacity=2)  # 5 (Fotolitografia - Crítico)
         self.etchers = simpy.Resource(env, capacity=3)  # 6 (Corrosão)
         self.ion_implanters = simpy.Resource(env, capacity=2)  # 7 (Dopagem)
-        self.furnaces = simpy.Resource(env, capacity=4)  # 8 (Difusão térmica)
-        self.cmp_polishers = simpy.Resource(env, capacity=2)  # 9 (Polimento Químico-Mecânico)
 
         # Logistics and quality control (Stores and FilterStore).
-        self.agv_fleet = simpy.Resource(env, capacity=5)  # 10 (Robôs de transporte)
-        self.metrology_queue = simpy.FilterStore(env, capacity=100)  # 11 (Inspeção com filtros)
-        self.finished_goods = simpy.Store(env, capacity=1000)  # 12 (Armazém final)
+        self.agv_fleet = simpy.Resource(env, capacity=5)  # 8 (Robôs de transporte)
+        self.metrology_queue = simpy.FilterStore(env, capacity=100)  # 9 (Inspeção com filtros)
+        self.finished_goods = simpy.Store(env, capacity=1000)  # 10 (Armazém final)
 
         # Dynamic resource tracking.
         self.active_foups: Dict[str, simpy.Store] = {}  # 13+ (Recipientes criados sob demanda)
@@ -189,7 +185,7 @@ def process_lot(env: simpy.Environment, fab: SemiconductorFab, lot: Lot):
     yield fab.metrology_queue.put(lot)
 
     # Pull the same lot back from queue by ID after inspection.
-    inspect_req = fab.metrology_queue.get(lambda l: l.id == lot.id)
+    inspect_req = fab.metrology_queue.get(lambda lot_item: lot_item.id == lot.id)
 
     # 6) Optional dynamic inspector (OR): dynamic resource or timeout fallback.
     timeout_event = env.timeout(30)

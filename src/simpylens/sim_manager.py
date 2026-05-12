@@ -13,7 +13,6 @@ from .tracking_patch import TrackingPatch
 
 class _LogBuffer:
     def __init__(self, capacity=1000):
-        self._capacity = 1
         self._events = deque(maxlen=1)
         self._next_seq = 1
         self.set_capacity(capacity)
@@ -27,7 +26,6 @@ class _LogBuffer:
         if value <= 0:
             raise ValueError("log capacity must be greater than zero")
 
-        self._capacity = value
         existing = list(self._events)
         self._events = deque(existing[-value:], maxlen=value)
 
@@ -419,7 +417,7 @@ class SimulationController:
 
         try:
             self._model(self.env)
-        except Exception as e:
+        except Exception:
             # propagate by updating time to 0 and rethrow for GUI to handle if needed
             self.update_time_cb(0.0)
             raise

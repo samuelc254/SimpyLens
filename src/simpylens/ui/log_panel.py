@@ -15,7 +15,6 @@ class LogPanel(ttk.Frame):
 
         self.log_enabled = tk.BooleanVar(value=True)
         self.log_collapsed = False
-        self.log_widget = None
         self.max_log_lines = 2000
         self.log_search_var = tk.StringVar(value="")
         self.log_resize_start_y = None

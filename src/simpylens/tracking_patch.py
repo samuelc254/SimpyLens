@@ -364,16 +364,6 @@ def _extract_call_target_from_frame_source(frame):
     return None
 
 
-def _action_to_event(action_name):
-    """Maps a lowercased action string to its log event name."""
-    return {
-        "request": "REQUEST",
-        "release": "RELEASE",
-        "put": "PUT",
-        "get": "GET",
-    }.get(action_name, action_name.upper())
-
-
 def _extract_process_source_location(process):
     """Best-effort extraction of user code location from a SimPy process generator."""
     if process is None:
@@ -428,32 +418,6 @@ def _describe_process_target(target):
         return "Condition"
 
     return event_name
-
-
-def _resolve_process_from_event(event):
-    """Best-effort process discovery for the next event queued in the environment."""
-    if event is None:
-        return None
-
-    process = getattr(event, "proc", None)
-    if process is not None:
-        return process
-
-    if type(event).__name__ == "Process" and hasattr(event, "_generator"):
-        return event
-
-    callbacks = getattr(event, "callbacks", None)
-    if callbacks:
-        for callback in callbacks:
-            owner = getattr(callback, "__self__", None)
-            if owner is not None and hasattr(owner, "_generator"):
-                return owner
-
-            nested_owner = getattr(owner, "__self__", None) if owner is not None else None
-            if nested_owner is not None and hasattr(nested_owner, "_generator"):
-                return nested_owner
-
-    return None
 
 
 def register_interaction(env, resource_instance, action, extra_data=None):

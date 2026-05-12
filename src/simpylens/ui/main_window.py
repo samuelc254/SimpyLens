@@ -37,7 +37,6 @@ class MainWindow(tk.Tk):
         self.current_model = model
 
         self.manual_layout_by_name = {}
-        self.last_breakpoint_hit = None
         self.layout_config_path = self._resolve_layout_config_path(lens_json_path)
         self._load_manual_layout_cache()
         self.editor_manager = EditorManager(self)
@@ -64,7 +63,7 @@ class MainWindow(tk.Tk):
             schedule_cb=lambda ms, fn: self.after(ms, fn),
             speed_getter=lambda: self.scl_speed.get(),
             log_callback=self.log_panel.log_message,
-            on_breakpoint_cb=self._on_breakpoint_hit,
+            on_breakpoint_cb=lambda event: self.inspector_panel.on_breakpoint_hit(event),
             seed=seed,
         )
 
@@ -142,9 +141,6 @@ class MainWindow(tk.Tk):
                         self.manual_layout_by_name[str(name)] = (float(coords[0]), float(coords[1]))
         except Exception:
             self.manual_layout_by_name = {}
-
-    def _save_manual_layout_cache(self):
-        self.save_manual_layout_cache()
 
     def save_manual_layout_cache(self):
         positions = {name: [float(coords[0]), float(coords[1])] for name, coords in self.manual_layout_by_name.items() if coords and len(coords) == 2}
@@ -250,10 +246,6 @@ class MainWindow(tk.Tk):
         self.inspector_panel.clear_hit_state()
         self.sim_ctrl.reset(self.current_model)
         self.after(100, self.canvas_view.center_view)
-
-    def _on_breakpoint_hit(self, event):
-        self.last_breakpoint_hit = dict(event)
-        self.inspector_panel.on_breakpoint_hit(event)
 
     def add_breakpoint(self, condition, label=None, enabled=True, pause_on_hit=True, edge="none"):
         breakpoint_id = self.sim_ctrl.add_breakpoint(
