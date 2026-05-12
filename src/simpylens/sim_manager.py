@@ -614,9 +614,9 @@ class Lens:
         self._sim_ctrl: Optional[SimulationController] = None
 
         if self._gui:
-            from .viewer import Viewer
+            from .ui.main_window import MainWindow
 
-            self.viewer = Viewer(model=self._model, title=title, seed=self._seed, lens_json_path=self._lens_json_path)
+            self.viewer = MainWindow(model=self._model, title=title, seed=self._seed, lens_json_path=self._lens_json_path)
             self._sim_ctrl = self.viewer.sim_ctrl
         else:
             self._sim_ctrl = SimulationController(
